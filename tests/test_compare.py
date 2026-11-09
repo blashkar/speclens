@@ -708,3 +708,51 @@ def test_a_diff_lists_a_shared_breaking_change_once_and_guesses_only_lone_rename
     assert text.count("enum value added") == 1
     assert "  breaking: enum value added: GET /boxes response 200 application/json: size (none -> 'l')" in text
     assert "\n    also in 1 operation: GET /boxes/{id}\n" in text
+
+
+def test_the_same_bound_or_value_written_another_way_is_no_change(write):
+    old = dedent("""
+        openapi: 3.0.3
+        info: {title: t, version: '1'}
+        paths: {}
+        components:
+          schemas:
+            Ring:
+              properties:
+                spin: {type: number, maximum: 1.5, exclusiveMaximum: true}
+                tilt: {type: number, minimum: 0, exclusiveMinimum: true, maximum: 90}
+                kind: {type: string, enum: [ring]}
+                load: {type: number, maximum: 10, exclusiveMaximum: true}
+                mode: {type: string, enum: [a]}
+        """)
+    new = dedent("""
+        openapi: 3.1.0
+        info: {title: t, version: '2'}
+        paths: {}
+        components:
+          schemas:
+            Ring:
+              properties:
+                spin: {type: number, exclusiveMaximum: 1.5}
+                tilt: {type: number, exclusiveMinimum: 0, maximum: 90}
+                kind: {type: string, const: ring}
+                load: {type: number, maximum: 10}
+                mode: {type: string, const: b}
+        """)
+    root = write({"a/openapi.yaml": old, "b/openapi.yaml": new,
+                  "c/openapi.yaml": new.replace("exclusiveMaximum: 1.5", "exclusiveMaximum: 1.2")})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    s.load(root / "c/openapi.yaml", "c")
+    # A change to a 3.1 exclusive bound is a change.
+    [spin] = s.compare("Ring.spin", "b", "c").changes
+    assert (spin.kind, spin.before, spin.after) == ("constraint-tightened", "exclusiveMaximum 1.5", "exclusiveMaximum 1.2")
+    # OpenAPI 3.0's boolean exclusive bound and 3.1's numeric one are the same bound; so are enum [x] and const x.
+    for name in ("Ring.spin", "Ring.tilt", "Ring.kind"):
+        assert s.compare(name, "a", "b").changes == [], name
+    # The same value, no longer exclusive: one more value allowed.
+    [load] = s.compare("Ring.load", "a", "b").changes
+    assert (load.kind, load.before, load.after) == ("constraint-loosened", "exclusiveMaximum 10", "maximum 10")
+    assert {(c.kind, c.before, c.after) for c in s.compare("Ring.mode", "a", "b").changes} == {
+        ("enum-value-added", None, "'b'"), ("enum-value-removed", "'a'", None)}

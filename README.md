@@ -209,6 +209,9 @@ change once, in the first operation it breaks, with the other operations it brea
 removed, and a count of the other changes. `full=True` lists every breaking change and those other changes too,
 by schema and by operation, and JSON always has every change.
 
+The same thing written another way is no change: OpenAPI 3.0's `maximum: 5` with `exclusiveMaximum: true` and
+3.1's `exclusiveMaximum: 5` are one bound, and `enum: [x]` and `const: x` allow the same value.
+
 Each change is rated for the side it affects: removing a required field breaks those who read responses,
 adding a required field breaks those who send requests. The ratings follow the defaults of
 [oasdiff](https://github.com/oasdiff/oasdiff), and `tools/compare_with_oasdiff.py` runs both on two specs and
