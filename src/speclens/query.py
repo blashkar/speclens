@@ -220,7 +220,7 @@ class FieldRow:
 
     def line(self, full: bool = False, owner: bool = True) -> str:
         """The row; `owner=False` leaves out "inherited from X" when a heading above the row says it."""
-        parts = [_full_enum(self.type, self.enum, full, row=True)] + _limit_text(self.limits) + (["required"] if self.required else []) + self.flags
+        parts = [_full_enum(self.type, self.enum, full, row=True)] + _limit_text(self.limits) + ["required" if self.required else "optional"] + self.flags
         if self.inherited_from and owner:
             parts.append(f"inherited from {self.inherited_from.split('/', 1)[1]}")
         text = f"{self.name}: {', '.join(parts)} {_cite(self.id, self.where)}"
@@ -481,12 +481,12 @@ class OperationResult(Result):
             lines.append(f"description: {_cut(self.description, MAIN_LIMIT, full)}")
         lines.append(f"parameters ({len(self.parameters)}):" if self.parameters else "parameters: none")
         for p in self.parameters:
-            parts = [_full_enum(p.type, p.enum, full, row=True)] + _limit_text(p.limits) + (["required"] if p.required
-                                                                                   else []) + p.flags
+            parts = [_full_enum(p.type, p.enum, full, row=True)] + _limit_text(p.limits) + [
+                "required" if p.required else "optional"] + p.flags
             lines.append(f"  {p.location} {p.name}: {', '.join(parts)} {_cite(p.id, p.where)}"
                          + (f" — {_cut(p.description, ROW_LIMIT, full)}" if p.description else ""))
         for b in self.request:
-            lines.append(f"request body{' (required)' if b.required else ''}: {b.media_type}: {b.type} [{b.schema}]")
+            lines.append(f"request body ({'required' if b.required else 'optional'}): {b.media_type}: {b.type} [{b.schema}]")
         lines.append("responses:" if self.responses else "responses: none with a schema")
         for b in self.responses:
             what = f"header {b.header}" if b.header else b.media_type
@@ -599,7 +599,7 @@ class FieldResult(Result):
         lines.append(f"held by {len(self.holders)} schema{'s' * (len(self.holders) != 1)}:")
         for h in self.holders:
             how = "inherited via " + " > ".join(v.split("/", 1)[1] for v in h.via) if h.inherited else "own"
-            lines.append(f"  {h.schema.split('/', 1)[1]} ({how}{', required' if h.required else ''}) [{h.schema}]")
+            lines.append(f"  {h.schema.split('/', 1)[1]} ({how}, {'required' if h.required else 'optional'}) [{h.schema}]")
         if self.used_by:
             lines.append(f"used by {len(set(u.operation for u in self.used_by))} operations:")
             for u in self.used_by[:30]:

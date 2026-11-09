@@ -110,7 +110,8 @@ fields (12: 3 own, 9 inherited):
 used by 3 operations: GET /menu, GET /order-items, POST /menu
 ```
 
-Field and parameter rows show the limits on the value as written, on it or on the schema it is through
+Field and parameter rows say whether each is `required` or `optional` (a request body too): a model reading rows
+that say nothing for optional ones tends to take them all for required. They show the limits on the value as written, on it or on the schema it is through
 `$ref` and `allOf` (`string, maxLength 3`; `limits` in JSON): `minLength`, `maxLength`, `minimum`,
 `maximum`, the exclusive bounds, `minItems`, `maxItems`, `multipleOf`, and the `pattern` the value must match.
 A field or parameter whose type is a named schema names it (`Coordinates`,
