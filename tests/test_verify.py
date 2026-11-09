@@ -888,6 +888,47 @@ def test_limits_said_with_words_between_or_of_a_name_said_before(write):
     assert [f.kind for f in verify("Names like `zebra*` hold kinds.", ev).findings] == ["unknown-name"]
 
 
+def test_a_limit_said_of_the_field_named_before_or_by_the_sentence(write):
+    root = write({"openapi.yaml": HEAD + dedent("""
+        paths:
+          /owners:
+            get:
+              responses: {'200': {description: ok}}
+          /owners/{id}:
+            get:
+              parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+              responses: {'200': {description: ok}}
+        components:
+          schemas:
+            Owner:
+              properties:
+                nickname: {type: string, minLength: 1, maxLength: 40}
+                tags: {type: array, minItems: 1, items: {type: string}}
+        """)})
+    s = SpecSet()
+    s.load(root / "openapi.yaml", "2.0")
+    ev = [s.get_schema("Owner", "2.0"), s.get_operation("GET /owners", label="2.0")]
+    for said, number, wrong in (
+            # "the field" in a later sentence is the one field named just before
+            (("The `tags` field lists labels. Although the field is optional, the `minItems 1` rule means at least "
+              "one label."), "minItems 1", "minItems 8"),
+            ("`nickname` is a name. Although the field is optional, it has a maximum length of 40.", "40", "64"),
+            # a sentence naming one field and some operations is still about the field
+            (("The `tags` field is in the responses of `GET /owners` and `GET /owners/{id}`, and the `minItems 1` "
+              "rule applies to it."), "1", "8"),
+            (("The `tags` field is in the responses of `GET /owners` and `GET /owners/{id}` and has a `minItems` "
+              "of 1."), "1", "8")):
+        r = verify(said, ev)
+        assert r.ok and r.checked_limits, said
+        assert not verify(wrong.join(said.rsplit(number, 1)), ev).ok, said
+    # A limit of something else in such a sentence is not the field's.
+    for said in ("`nickname` is optional. Although the field is optional, the list holds at most 50 owners.",
+                 "The `nickname` field is in `Owner`, and `GET /owners` returns at most 50 owners.",
+                 "The `nickname` field is in `Owner`, and a page holds at most 50 owners.",
+                 "The `nickname` field is returned by `GET /owners`, which returns at most 50 owners."):
+        assert verify(said, ev).ok, said
+
+
 def test_limits_said_under_a_version_or_after_a_lead_in(write):
     owner = """
         components:

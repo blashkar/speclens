@@ -1086,6 +1086,11 @@ _SECTION = re.compile(r"\s*(?:#{1,6}\s+.+|\*\*[^*\n]+\*\*\s*:?)\s*")
 _PRONOUN = re.compile(r"\s*this\s+means(?:\s+that)?(?:\s+(?:it|the\s+(?:field|property|parameter|header|value|"
                       r"attribute|array|list|string)))?\b|\s*(?:it|its|it's|this|that)\b|\s*the\s+(?:field|property|parameter|header|value|attribute|"
                       r"array|list|string)\b", re.I)
+# Words anywhere in a sentence that point back to the field named before: "Although the field is optional, ..."
+_REFERS = re.compile(r"\b(?:the|this|that)\s+(?:field|property|parameter|header|attribute)\b", re.IGNORECASE)
+# A verb joined to the sentence's subject: "`tags` is used by `GET /owners` and has a maximum of 8"
+_JOINED = re.compile(r"\b(?:and|but)\s+(?:(?:also|still|then)\s+)?(?:has|have|is|are|must|can|may|allows?|accepts?|"
+                     r"takes?|holds?|contains?)\b[^`]*$", re.IGNORECASE)
 # A field in plain words, with the schema it is in: "the minimum age in `Owner` is 0"
 _LIMIT_PLAIN = re.compile(rf"(?<![\w`-])(max(?:imum)?|min(?:imum)?)\s+((?:[A-Za-z]+\s+){{0,2}}?[A-Za-z]+?)"
                           r"(?:\s+(length|value|size|count))?\s+(?:in|for|of|on)\s+(?:the\s+|an?\s+)?`?([A-Z]\w*)`?"
@@ -1158,7 +1163,20 @@ def _check_limits(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
         if not lead_name and it:
             pronoun = _PRONOUN.match(sentence)
             lead_name = it if pronoun else None
+        referred = None
+        if not lead_name and it and not named and _REFERS.search(sentence):  # "Although the field is optional, ..."
+            referred = previous = it
+        # The one field the sentence names, when the sentence opens with it, is what a later clause with no name
+        # of its own is about: "`tags` is used by two operations, and the `minItems 1` rule applies to it"
+        opens = re.match(r"[\s*-]*(?:the\s+)?`([^`]+)`", sentence, re.IGNORECASE)
+        own = named[0] if len(named) == 1 and not lead_name and opens and _limit_name(opens.group(1)) == named[0] \
+            else None
         for clause in _clauses(sentence):
+            in_clause = {_limit_name(c) for c in _CODE.findall(clause)}
+            clause_lead = lead_name or (own if own and own not in in_clause and not in_clause & ev.limits.keys()
+                                        else None)
+            if not clause_lead and referred and (_REFERS.search(clause) or re.search(r"\bits?\b", clause, re.IGNORECASE)):
+                clause_lead = referred  # "Although the field is optional, it has ..."
             if _CONDITION.search(_CODE.sub(" ", clause)):
                 continue
             labels = _labels_in(clause, ev.labels) or (in_sentence if len(in_sentence) == 1 else []) or \
@@ -1174,7 +1192,7 @@ def _check_limits(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
                     else "items" if "items" in said_words else ""
                 named_after = re.match(r"\s*(?:(?:is|are)\s+(?:defined|set|specified|given|documented|stated)\s+)?"
                                        r"(?:for|on|of|in)\s+(?:the\s+)?`([^`]+)`", clause[absent.end():], re.I)
-                subjects = _subjects_at(clause, absent.start(), (), lead, lead_name) or \
+                subjects = _subjects_at(clause, absent.start(), (), lead, clause_lead) or \
                     ([_limit_name(named_after.group(1))] if named_after else [])
                 for subject in subjects:
                     looked = _shown_for(ev, subject, schemas, labels)
@@ -1200,8 +1218,16 @@ def _check_limits(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
                                   float(m.group(5).replace(",", "")), counts, m.end()), spelled[0]))
             spans = [(s[0], s[4]) for s, _ in said]
             for (at, side, value, counts, end), spelled in said:
-                for subject in [spelled] if spelled else \
-                        _subjects_at(clause, at, [x for x in spans if x[0] != at], lead, lead_name, end, pronoun):
+                subjects = [spelled] if spelled else \
+                    _subjects_at(clause, at, [x for x in spans if x[0] != at], lead, clause_lead, end, pronoun)
+                if not subjects and referred and not clause_lead and not in_clause & ev.limits.keys() and \
+                        re.fullmatch(r"\s*(?:the|a|an)?\s*", _CODE.sub(" ", clause[:at]), re.IGNORECASE):
+                    subjects = [referred]  # "..., the `minItems 1` rule means ...": the limit opens the clause
+                if not subjects and own in in_clause and _JOINED.search(_CODE.sub(" ", clause[:at])) and all(
+                        w.lower() in _LIMIT_TIES for w in re.findall(r"[A-Za-z']+", _JOINED.search(clause[:at])
+                                                                     .group(0))):
+                    subjects = [own]  # "... and has a `minItems` of 1": the verb's subject is the sentence's
+                for subject in subjects:
                     looked = _shown_for(ev, subject, schemas, labels)
                     keywords = _KEYWORDS[(side, counts)]
                     values = {(lab, k): v for lab, kv in looked.items() for k, v in kv.items() if k in keywords}
