@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from .compare import Comparison, SpecDiff
+from .descriptions import description_issues
 from .query import Ambiguous, NotFound
 from .spec import SpecSet, load_spec
 from .verify import verify as _verify
@@ -156,16 +157,17 @@ def build_server(specs: SpecSet, allow: list[Path] | None = None):
 
     @tool
     def validate(label: str | None = None, limit: int = 50) -> str:
-        """Broken references and other problems in a spec, with file:line. Answers about a spec with errors may be
-        incomplete."""
+        """Broken references and other problems in a spec, with file:line, and descriptions that state a limit the
+        schema contradicts. Answers about a spec with errors may be incomplete."""
         try:
             s = specs.get(label)
         except KeyError as e:
             raise ToolError(str(e).strip("'\"")) from e
-        lines = [f"{s.label}: {len(s.errors)} errors, {len(s.issues) - len(s.errors)} warnings"]
-        lines += [i.to_text() for i in s.issues[:limit]]
-        if len(s.issues) > limit:
-            lines.append(f"... and {len(s.issues) - limit} more")
+        issues = s.issues + description_issues(s)
+        lines = [f"{s.label}: {len(s.errors)} errors, {len(issues) - len(s.errors)} warnings"]
+        lines += [i.to_text() for i in issues[:limit]]
+        if len(issues) > limit:
+            lines.append(f"... and {len(issues) - limit} more")
         shown("\n".join(lines))
         return "\n".join(lines)
 
