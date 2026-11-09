@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - name: Install
+        run: uv sync --locked --extra mcp
+      - name: Test
+        run: uv run pytest -q
+      - name: Validate the fixture spec
+        run: uv run speclens validate tests/fixtures/openapi-starter/openapi.yaml
+      - name: Cross-check the fixture spec
+        run: uv run python tools/crosscheck.py tests/fixtures/openapi-starter/openapi.yaml
+      - name: Build the package and run it from the wheel
+        run: |
+          uv build
+          uvx --from "$(ls dist/*.whl)" speclens validate tests/fixtures/openapi-starter/openapi.yaml
