@@ -111,7 +111,7 @@ def test_get_schema_lists_own_and_inherited_fields(shop):
     assert "    status: string enum ['available', 'sold'], required, readOnly " \
            "[v1:field/Pet.status openapi.yaml:55]" in text
     assert text.count("inherited from Pet") == 1
-    assert "bark: string|null [v1:field/Dog.bark openapi.yaml:68] — How it sounds." in text
+    assert "bark: string|null, optional [v1:field/Dog.bark openapi.yaml:68] — How it sounds." in text
     assert r.to_dict()["fields"][0]["id"] == "v1:field/Dog.bark"
 
 
@@ -618,11 +618,11 @@ def test_rows_show_the_limits_on_a_value(spec):
                     "short": {"minLength": 2, "maxLength": 2, "pattern": "^[A-Z]+$"},  # through allOf
                     "tags": {"maxItems": 5},  # the array's own, not its items'
                     "weight": {"exclusiveMinimum": 0}, "age": {}}
-    assert "name: string, maxLength 40 [" in s.get_schema("Pet").to_text()
+    assert "name: string, maxLength 40, optional [" in s.get_schema("Pet").to_text()
     params = {p.name: p.limits for p in s.get_operation("GET /pets").parameters}
     assert params == {"limit": {"minimum": 1, "maximum": 100}, "code": {"minLength": 2, "maxLength": 2}}
-    assert "query limit: integer, minimum 1, maximum 100 [" in s.get_operation("GET /pets").to_text()
-    assert "maxLength 2, pattern ^[A-Z]+$ [v1:field/Pet.short" in s.get_schema("Pet").to_text()
+    assert "query limit: integer, minimum 1, maximum 100, optional [" in s.get_operation("GET /pets").to_text()
+    assert "maxLength 2, pattern ^[A-Z]+$, optional [v1:field/Pet.short" in s.get_schema("Pet").to_text()
 
 
 def test_a_boolean_exclusive_bound_of_openapi_3_0(spec):
@@ -924,3 +924,26 @@ def test_a_parent_schema_shows_its_discriminator_and_who_extends_it(spec):
     text = pet.to_text()
     assert "discriminator 'kind': 'cat' -> Cat, 'dog' -> Dog" in text
     assert "extended by (allOf): Cat, Dog" in text
+
+
+def test_every_row_says_whether_it_is_required_or_optional(spec):
+    s = spec({"openapi.yaml": HEAD + dedent("""
+        paths:
+          /pets:
+            post:
+              parameters: [{name: dryRun, in: query, schema: {type: boolean}}]
+              requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/Pet'}}}}
+              responses: {'201': {description: ok}}
+        components:
+          schemas:
+            Pet:
+              required: [name]
+              properties: {name: {type: string}, nickname: {type: string}}
+        """)})
+    text = s.get_schema("Pet").to_text()
+    # A model reading rows that say nothing takes them all for required: optional is said too.
+    assert "  name: string, required [" in text and "  nickname: string, optional [" in text
+    op = s.get_operation("POST /pets").to_text()
+    assert "  query dryRun: boolean, optional [" in op
+    assert "request body (optional): application/json: Pet" in op
+    assert "Pet (own, optional)" in s.find_field("nickname").to_text()
