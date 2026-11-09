@@ -16,6 +16,7 @@ import argparse
 import json
 import sys
 
+from .descriptions import description_issues
 from .query import Ambiguous, NotFound
 from .spec import SpecSet, load_spec
 
@@ -24,22 +25,23 @@ SHOWN_PER_CODE = 5
 
 def validate(spec, args) -> int:
     errors = len(spec.errors)
+    issues = spec.issues + description_issues(spec)
     if args.json:
         print(json.dumps({"label": spec.label, "openapi": spec.version, "ok": spec.ok, **spec.counts(),
-                          "issues": [i.to_dict() for i in spec.issues]}, indent=2))
+                          "issues": [i.to_dict() for i in issues]}, indent=2))
     else:
         c = spec.counts()
         print(f"{spec.label} (OpenAPI {spec.version or '?'}): {c['files']} files, {c['operations']} operations, "
               f"{c['schemas']} schemas, {c['fields']} fields, {c['parameters']} parameters")
         shown: dict[str, int] = {}
-        for issue in spec.issues:
+        for issue in issues:
             shown[issue.code] = shown.get(issue.code, 0) + 1
             if args.all or shown[issue.code] <= SHOWN_PER_CODE:
                 print(issue.to_text())
         for code, n in shown.items():
             if not args.all and n > SHOWN_PER_CODE:
                 print(f"... and {n - SHOWN_PER_CODE} more [{code}] (--all shows every one)")
-        warnings = len(spec.issues) - errors
+        warnings = len(issues) - errors
         print("ok" if spec.ok else f"{errors} error{'s' * (errors != 1)}", end="")
         print(f", {warnings} warning{'s' * (warnings != 1)}" if warnings else "")
     return 0 if spec.ok else 1

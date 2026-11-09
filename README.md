@@ -222,6 +222,13 @@ operation's requirement, or "security: none declared" when the spec gives none. 
 a requirement names that is not defined, and about a scheme no requirement names. A renamed
 `operationId` is info: the HTTP call is the same, but code generated from the spec is renamed.
 
+`validate` also warns (`description-contradicts-schema`) about a description that states a limit the schema
+contradicts: "The name must not exceed 100 characters." on a schema whose `name` has `maxLength: 120`, or "a
+number from 1 to 12" on an integer bounded otherwise. A reader, or a model, may believe the prose. A schema's own
+description is read with its field names as names; only descriptions with a digit are read, and only limits
+are checked: "Required" in prose is most often a condition ("required for mobile integrations"). On 281 public
+specs it found 13, each a range in prose narrower than the schema's.
+
 `diff --breaking` is there for quick checks; to gate releases, use oasdiff, which has far more checks
 (sunset dates, extensions and more) and configuration. What `compare` adds is answers about one thing,
 in citable ids that `verify` can check (see [Why speclens](#why-speclens-and-when-to-use-something-else)).
