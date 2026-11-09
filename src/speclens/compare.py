@@ -69,6 +69,7 @@ RULES = {
     "discriminator-values-changed": (BREAKING, BREAKING),
     "parent-added": (INFO, INFO),
     "parent-removed": (INFO, INFO),
+    "field-moved": (INFO, INFO),  # the same field, now written on a parent (or no longer): the JSON is the same
     "schema-added": (INFO, INFO),
     "schema-removed": (BREAKING, BREAKING),
     "possibly-renamed": (INFO, INFO),  # a hint from similar contents, never a fact
@@ -361,6 +362,9 @@ class _Comparer:
             out.append(self.change(kind, name, describe(ga, f), None, None, f.id, None))
         for name in [n for n in fa if n in fb]:
             (f1, e1), (f2, e2) = fa[name], fb[name]
+            if _moved(ga, e1, gb, e2, sb):
+                out.append(self.change("field-moved", name, _written_on(ga, e1), _written_on(gb, e2), None, f1.id,
+                                       f2.id))
             if e1.data["required"] != e2.data["required"]:
                 out.append(self.change("required-added" if e2.data["required"] else "required-removed", name,
                                        None, None, None, f1.id, f2.id))
@@ -766,6 +770,34 @@ def _fields(graph: Graph, schema: Node) -> dict:
     return out
 
 
+def _written_on(graph: Graph, edge) -> str:
+    """Where a schema's field is written: "own", or "inherited from" the parent that writes it."""
+    if not edge.data.get("inherited") or not edge.data.get("via"):
+        return "own"
+    return f"inherited from {graph.nodes[edge.data['via'][-1]].name}"
+
+
+def _writer(graph: Graph, edge) -> str:
+    """The name of the schema that writes a field."""
+    return graph.nodes[edge.data["via"][-1] if edge.data.get("inherited") and edge.data.get("via") else
+                       edge.source].name
+
+
+def _moved(ga: Graph, ea, gb: Graph, eb, schema_b: Node) -> bool:
+    """Whether a field is written somewhere else: on the schema itself and now on a parent, or the reverse, or
+    on another parent while the old one is still a parent. A parent replaced by another (parent removed, parent
+    added) already says where all its fields went."""
+    if _writer(ga, ea) == _writer(gb, eb):  # an inline wrapper around a schema, now that schema: the same place
+        return False
+    before, after = _written_on(ga, ea), _written_on(gb, eb)
+    if before == after:  # "own" in both: another schema in the field's place, which is said where it changed
+        return False
+    if before == "own" or after == "own":
+        return True
+    parents = {gb.nodes[v].name for e in gb.outgoing(schema_b.id, g.HAS_FIELD) for v in e.data.get("via") or []}
+    return _writer(ga, ea) in parents
+
+
 def _edge_key(e) -> str:
     keyword = e.data.get("keyword", "")
     if "index" in e.data:
@@ -866,6 +898,10 @@ def compare(a, b, name: str) -> Comparison:
                 del node
             else:
                 changes = c.field(fa, fb, side)
+                ea, eb = _field_edge(a, name, fa), _field_edge(b, name, fb)
+                if ea and eb and _moved(a.graph, ea, b.graph, eb, b.graph.nodes[eb.source]):
+                    changes.insert(0, _rated(c.change("field-moved", "", _written_on(a.graph, ea),
+                                                      _written_on(b.graph, eb), None, fa.id, fb.id), side, ""))
             return Comparison("field", name, a.label, b.label, fa and fa.id, fb and fb.id, side, changes)
     raise NotFound("schema, operation or field", name, a.index.names.suggest(g.SCHEMA, name))
 
@@ -877,6 +913,13 @@ def _field(spec, name: str) -> Node | None:
         return None
     ids = spec.graph.resolve(f"{spec.label}:{g.FIELD}/{schema.name}.{field_name}")
     return spec.graph.nodes[ids[0]] if ids else None
+
+
+def _field_edge(spec, name: str, field: Node):
+    """The edge by which the schema `name` names holds this field."""
+    schema = _find(spec, g.SCHEMA, name.rsplit(".", 1)[0])
+    return next((e for e in spec.graph.outgoing(schema.id, g.HAS_FIELD) if e.target == field.id), None) \
+        if schema else None
 
 
 @dataclass
