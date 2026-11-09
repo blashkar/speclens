@@ -106,8 +106,41 @@ _WORDING = {
     "options-introduced-compatible": "options introduced (one accepts all the old schema did)", "required-field-removed": "required field removed",
 }
 # keyword -> True if a larger value allows more
-_LIMITS = {"maxLength": True, "maximum": True, "maxItems": True, "maxProperties": True,
-           "minLength": False, "minimum": False, "minItems": False, "minProperties": False}
+_LIMITS = {"maxLength": True, "maxItems": True, "maxProperties": True,
+           "minLength": False, "minItems": False, "minProperties": False}
+
+
+def _bound(d: dict, side: str) -> tuple | None:
+    """The lower or upper bound on a number, as (value, exclusive), whichever way it is written: OpenAPI 3.0's
+    `maximum: 5` with `exclusiveMaximum: true`, or 3.1's `exclusiveMaximum: 5`. With both a bound and an
+    exclusive one, the tighter."""
+    plain, excl = ("minimum", "exclusiveMinimum") if side == "min" else ("maximum", "exclusiveMaximum")
+    value, flag = d.get(plain), d.get(excl)
+    found = []
+    if _number(value):
+        found.append((value, flag is True))
+    if _number(flag):
+        found.append((flag, True))
+    if not found:
+        return None
+    # The tighter: the higher lower bound, the lower upper bound; at the same value, the exclusive one.
+    return (max if side == "min" else min)(found, key=lambda b: (b[0] if side == "min" else -b[0], b[1]))
+
+
+def _allowed(d: dict) -> list | None:
+    """The values a schema allows, when it lists them: `enum`, or `const` as a list of one."""
+    if "const" in d:
+        return [d["const"]]
+    return d["enum"] if isinstance(d.get("enum"), list) else None
+
+
+def _number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _bound_text(b: tuple | None, side: str) -> str:
+    plain, excl = ("minimum", "exclusiveMinimum") if side == "min" else ("maximum", "exclusiveMaximum")
+    return f"{plain} none" if b is None else f"{excl if b[1] else plain} {b[0]}"
 
 
 @dataclass
@@ -235,11 +268,12 @@ class _Comparer:
         if fa != fb:
             kind = "format-added" if fa is None else "format-removed" if fb is None else "format-changed"
             out.append(self.change(kind, where, fa, fb, side, a, b))
-        if "const" in da or "const" in db:
-            if da.get("const") != db.get("const"):
-                out.append(self.change("const-changed", where, da.get("const"), db.get("const"), side, a, b))
-        ea, eb = da.get("enum"), db.get("enum")
-        if isinstance(ea, list) and isinstance(eb, list):
+        # `const: x` and `enum: [x]` allow the same one value: compared as the values each allows.
+        ea, eb = _allowed(da), _allowed(db)
+        if "const" in da and "const" in db:
+            if da["const"] != db["const"]:
+                out.append(self.change("const-changed", where, da["const"], db["const"], side, a, b))
+        elif isinstance(ea, list) and isinstance(eb, list):
             for v in [v for v in eb if v not in ea]:
                 out.append(self.change("enum-value-added", where, None, repr(v), side, a, b))
             for v in [v for v in ea if v not in eb]:
@@ -259,6 +293,19 @@ class _Comparer:
             else:
                 kind = "constraint-loosened" if (vb > va) == larger_allows_more else "constraint-tightened"
             out.append(self.change(kind, where, f"{k} {_show(va)}", f"{k} {_show(vb)}", side, a, b))
+        for end in ("min", "max"):
+            ba, bb = _bound(da, end), _bound(db, end)
+            if ba == bb:
+                continue
+            if ba is None or bb is None:
+                kind = "constraint-tightened" if ba is None else "constraint-loosened"
+            else:
+                # An upper bound allows more when higher, or when the same and no longer exclusive.
+                wider = (bb[0] > ba[0]) if end == "max" else (bb[0] < ba[0])
+                if bb[0] == ba[0]:
+                    wider = ba[1] and not bb[1]
+                kind = "constraint-loosened" if wider else "constraint-tightened"
+            out.append(self.change(kind, where, _bound_text(ba, end), _bound_text(bb, end), side, a, b))
         pa, pb = da.get("pattern"), db.get("pattern")
         if pa != pb:
             kind = "pattern-added" if pa is None else "pattern-removed" if pb is None else "pattern-changed"
