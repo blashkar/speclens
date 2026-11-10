@@ -11,6 +11,7 @@ them are a matter of policy that some API owners decide otherwise: a new enum va
 in a response are breaking, since a client that handles every known value can fail on a new one.
 """
 
+import re
 from collections import deque
 from dataclasses import dataclass, field, replace
 
@@ -209,7 +210,8 @@ class Comparison(Result):
             return "\n".join(lines)
         c = self.counts()
         grouped = _grouped(sorted(self.changes, key=lambda ch: _ORDER[ch.level]))
-        distinct = f", {len(grouped)} distinct" if len(grouped) != len(self.changes) else ""
+        n = len({(ch.kind, ch.level, ch.before, ch.after, ch.a, ch.b) for ch in self.changes})
+        distinct = f", {n} distinct" if n != len(self.changes) else ""
         lines.append(f"{len(self.changes)} change{'s' * (len(self.changes) != 1)}{distinct} ({c[BREAKING]} breaking, "
                      f"{c[WARNING]} warning, {c[INFO]} info):")
         lines += [f"  {line}" for line in grouped]
@@ -222,8 +224,34 @@ def _grouped(changes: list[Change]) -> list[str]:
     groups: dict[tuple, list[Change]] = {}
     for c in changes:
         groups.setdefault((c.kind, c.level, c.before, c.after, c.a, c.b), []).append(c)
-    return [cs[0].line() + (f" (and {len(cs) - 1} more place{'s' * (len(cs) != 2)})" if len(cs) > 1 else "")
-            for cs in groups.values()]
+    lines, moved = [], {}
+    for cs in groups.values():
+        place = _FIELD_PLACE.fullmatch(cs[0].where or "") if cs[0].kind == "field-moved" else None
+        if place:  # fields moved together, to the same parent: one line
+            key = (cs[0].level, cs[0].before, cs[0].after, place.group(1))
+            if key not in moved:
+                moved[key] = (len(lines), [])
+                lines.append(None)
+            moved[key][1].append((cs, place.group(2)))
+            continue
+        lines.append(_placed(cs))
+    for (_, _, _, prefix), (at, found) in moved.items():
+        if len(found) == 1:
+            lines[at] = _placed(found[0][0])
+            continue
+        first = found[0][0][0]
+        names = ", ".join(name for _, name in found)
+        where = f"{prefix}{{{names}}}" if prefix else names  # data.contact.{email, phone}
+        lines[at] = replace(first, where=where).line()  # every field's id is in the JSON
+    return lines
+
+
+# A field's place in a change: what it is under, and its name ("card.contact.email", "request: email")
+_FIELD_PLACE = re.compile(r"(.*?[.:]\s?|)([^.:\s]+)")
+
+
+def _placed(cs: list[Change]) -> str:
+    return cs[0].line() + (f" (and {len(cs) - 1} more place{'s' * (len(cs) != 2)})" if len(cs) > 1 else "")
 
 
 _SIDES = {"request": "requests", "response": "responses", "both": "requests and responses",

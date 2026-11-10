@@ -339,6 +339,29 @@ def test_a_field_moved_to_a_parent_says_so(write):
                 and c.kind != "field-moved"]
 
 
+def test_fields_moved_together_are_one_line(write):
+    def spec(on_parent):
+        moved = "\n".join(f"{n}: {{type: string}}" for n in ("born", "code", "country"))
+        parent, own = (moved, "") if on_parent else ("", moved)
+        return HEAD + "components:\n  schemas:\n" + "".join(
+            f"    {name}:\n" + body for name, body in (
+                ("Person", "      properties:\n        id: {type: string}\n"
+                 + "".join(f"        {line}\n" for line in parent.splitlines())),
+                ("Customer", "      allOf:\n        - $ref: '#/components/schemas/Person'\n"
+                 "        - properties:\n            note: {type: string}\n"
+                 + "".join(f"            {line}\n" for line in own.splitlines()))))
+    root = write({"a/openapi.yaml": spec(False), "b/openapi.yaml": spec(True)})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    r = s.compare("Customer", "a", "b")
+    assert [c.where for c in r.changes if c.kind == "field-moved"] == ["born", "code", "country"]  # each in JSON
+    text = r.to_text()
+    assert "3 changes (0 breaking, 0 warning, 3 info)" in text
+    assert "field moved: born, code, country (own -> inherited from Person)" in text
+    assert text.count("field moved") == 1
+
+
 def test_a_removed_schema_that_looks_renamed_gets_a_hint(write):
     fields = "{id: {type: string}, distance: {type: integer}, speed: {type: number}, eta: {type: string}}"
     old = HEAD + dedent(f"""
