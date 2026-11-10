@@ -332,9 +332,9 @@ def test_a_field_moved_to_a_parent_says_so(write):
     moved = [c for c in s.compare("Lighthouse", "a", "b").changes if c.kind == "field-moved"]
     assert [(c.where, c.before, c.after, c.level) for c in moved] == [
         ("keeper", "own", "inherited from Station", "info")]
-    assert "field moved: keeper (own -> inherited from Station)" in s.compare("Lighthouse", "a", "b").to_text()
+    assert "field moved: keeper (own -> inherited from Station [b:schema/Station])" in s.compare("Lighthouse", "a", "b").to_text()
     assert ("field-moved", "", "info") in kinds(s.compare("Lighthouse.keeper", "a", "b"))
-    assert "field moved: keeper (inherited from Station -> own)" in s.compare("Lighthouse", "b", "a").to_text()
+    assert "field moved: keeper (inherited from Station [b:schema/Station] -> own)" in s.compare("Lighthouse", "b", "a").to_text()
     assert not [c for c in s.compare("Lighthouse", "a", "b").changes if c.kind.startswith("field-")
                 and c.kind != "field-moved"]
 
@@ -358,7 +358,8 @@ def test_fields_moved_together_are_one_line(write):
     assert [c.where for c in r.changes if c.kind == "field-moved"] == ["born", "code", "country"]  # each in JSON
     text = r.to_text()
     assert "3 changes (0 breaking, 0 warning, 3 info)" in text
-    assert "field moved: born, code, country (own -> inherited from Person)" in text
+    # one line, citing the parent they all moved to
+    assert "field moved: born, code, country (own -> inherited from Person [b:schema/Person])\n" in text + "\n"
     assert text.count("field moved") == 1
 
 

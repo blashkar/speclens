@@ -234,7 +234,8 @@ contradicts: "The name must not exceed 100 characters." on a schema whose `name`
 number from 1 to 12" on an integer bounded otherwise. A reader, or a model, may believe the prose. A schema's own
 description is read with its field names as names; only descriptions with a digit are read, and only limits
 are checked: "Required" in prose is most often a condition ("required for mobile integrations"). On 281 public
-specs it found 13, each a range in prose narrower than the schema's.
+specs it found 11, each a range in prose narrower than the schema's; a limit said under a condition ("if the
+review recurs weekly, ... cannot exceed 7") is not one.
 
 `diff --breaking` is there for quick checks; to gate releases, use oasdiff, which has far more checks
 (sunset dates, extensions and more) and configuration. What `compare` adds is answers about one thing,

@@ -923,7 +923,8 @@ def test_a_limit_said_of_the_field_named_before_or_by_the_sentence(write):
               "if the field is present, it holds a label."), "minItems 1", "minItems 8"),
             ("`nickname` is a name. Although the field is optional, `minLength 1` applies if it is present.",
              "minLength 1", "minLength 8"),
-            ("When provided, `tags` must have at least 1 item.", "1", "8")):
+            ("When provided, `tags` must have at least 1 item.", "1", "8"),
+            ("If present, `nickname` has a maximum length of 40.", "40", "64")):
         r = verify(said, ev)
         assert r.ok and r.checked_limits, said
         assert not verify(wrong.join(said.rsplit(number, 1)), ev).ok, said
@@ -934,7 +935,9 @@ def test_a_limit_said_of_the_field_named_before_or_by_the_sentence(write):
                  "The `nickname` field is returned by `GET /owners`, which returns at most 50 owners.",
                  # a real condition still makes the limit conditional
                  "`nickname` has a maximum length of 64 when used for search.",
-                 "`nickname` has a maximum length of 64 if the owner is a company."):
+                 "`nickname` has a maximum length of 64 if the owner is a company.",
+                 "When used for search, the `nickname` field has a maximum length of 64.",
+                 "`nickname` has a maximum length of 64, if the owner is a company."):
         assert verify(said, ev).ok, said
 
 

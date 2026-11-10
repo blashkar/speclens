@@ -1179,6 +1179,9 @@ def _check_limits(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
         opens = re.match(r"[\s*-]*(?:the\s+)?`([^`]+)`", sentence, re.IGNORECASE)
         own = named[0] if len(named) == 1 and not lead_name and opens and _limit_name(opens.group(1)) == named[0] \
             else None
+        if any(re.match(r"\s*(?:if|when|whenever|unless)\b", c, re.IGNORECASE) and
+               _CONDITION.search(_PRESENCE.sub(" ", _CODE.sub(" ", c))) for c in _clauses(sentence)):
+            continue  # "When used for search, `name` has ...": the condition is a clause of its own
         for clause in _clauses(sentence):
             in_clause = {_limit_name(c) for c in _CODE.findall(clause)}
             clause_lead = lead_name or (own if own and own not in in_clause and not in_clause & ev.limits.keys()
