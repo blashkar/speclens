@@ -167,6 +167,11 @@ class Change:
         elif self.before is not None or self.after is not None:
             text += f" ({_show(self.before)} -> {_show(self.after)})"
         node = self.b or self.a
+        if self.kind == "field-moved":  # the note is the parent's id, said with it
+            parent = self.after if self.after != "own" else self.before
+            if self.note:
+                text = text.replace(parent, f"{parent} [{self.note}]", 1)
+            return text + (f" [{node}]" if node else "")
         return text + (f" [{node}]" if node else "") + (f" — {self.note}" if self.note else "")
 
 
@@ -242,7 +247,8 @@ def _grouped(changes: list[Change]) -> list[str]:
         first = found[0][0][0]
         names = ", ".join(name for _, name in found)
         where = f"{prefix}{{{names}}}" if prefix else names  # data.contact.{email, phone}
-        lines[at] = replace(first, where=where).line()  # every field's id is in the JSON
+        # the parent's id, said after its name, stands for them all; every field's id is in the JSON
+        lines[at] = replace(first, where=where, a=None, b=None).line()
     return lines
 
 
@@ -391,8 +397,8 @@ class _Comparer:
         for name in [n for n in fa if n in fb]:
             (f1, e1), (f2, e2) = fa[name], fb[name]
             if _moved(ga, e1, gb, e2, sb):
-                out.append(self.change("field-moved", name, _written_on(ga, e1), _written_on(gb, e2), None, f1.id,
-                                       f2.id))
+                out.append(replace(self.change("field-moved", name, _written_on(ga, e1), _written_on(gb, e2), None,
+                                               f1.id, f2.id), note=_parent_id(e2) or _parent_id(e1)))
             if e1.data["required"] != e2.data["required"]:
                 out.append(self.change("required-added" if e2.data["required"] else "required-removed", name,
                                        None, None, None, f1.id, f2.id))
@@ -805,6 +811,11 @@ def _written_on(graph: Graph, edge) -> str:
     return f"inherited from {graph.nodes[edge.data['via'][-1]].name}"
 
 
+def _parent_id(edge) -> str | None:
+    """The id of the parent a field is inherited from, if it is."""
+    return edge.data["via"][-1] if edge.data.get("inherited") and edge.data.get("via") else None
+
+
 def _writer(graph: Graph, edge) -> str:
     """The name of the schema that writes a field."""
     return graph.nodes[edge.data["via"][-1] if edge.data.get("inherited") and edge.data.get("via") else
@@ -928,8 +939,9 @@ def compare(a, b, name: str) -> Comparison:
                 changes = c.field(fa, fb, side)
                 ea, eb = _field_edge(a, name, fa), _field_edge(b, name, fb)
                 if ea and eb and _moved(a.graph, ea, b.graph, eb, b.graph.nodes[eb.source]):
-                    changes.insert(0, _rated(c.change("field-moved", "", _written_on(a.graph, ea),
-                                                      _written_on(b.graph, eb), None, fa.id, fb.id), side, ""))
+                    changes.insert(0, replace(_rated(c.change("field-moved", "", _written_on(a.graph, ea),
+                                                              _written_on(b.graph, eb), None, fa.id, fb.id), side, ""),
+                                              note=_parent_id(eb) or _parent_id(ea)))
             return Comparison("field", name, a.label, b.label, fa and fa.id, fb and fb.id, side, changes)
     raise NotFound("schema, operation or field", name, a.index.names.suggest(g.SCHEMA, name))
 
