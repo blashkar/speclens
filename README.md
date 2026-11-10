@@ -212,6 +212,9 @@ by schema and by operation, and JSON always has every change.
 
 The same thing written another way is no change: OpenAPI 3.0's `maximum: 5` with `exclusiveMaximum: true` and
 3.1's `exclusiveMaximum: 5` are one bound, and `enum: [x]` and `const: x` allow the same value.
+A field now written on a parent the schema inherits from with allOf (or no longer) is the same field: it is
+reported as moved, an info change (`field moved: keeper (own -> inherited from Station)`), not as removed and
+added. A parent replaced by another is said once, as the parent removed and added.
 
 Each change is rated for the side it affects: removing a required field breaks those who read responses,
 adding a required field breaks those who send requests. The ratings follow the defaults of

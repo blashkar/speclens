@@ -307,6 +307,38 @@ def test_nullable_beside_all_of_is_still_nullable_as_a_ref(write):
     assert not [c for c in s.compare("Repo", "a", "b").changes if c.level != "info"]
 
 
+def test_a_field_moved_to_a_parent_says_so(write):
+    # The same field, now written on the parent the schema inherits from: not a field gone and another come,
+    # and not only a new description.
+    def spec(on_parent):
+        return HEAD + dedent(f"""
+            components:
+              schemas:
+                Station:
+                  properties:
+                    id: {{type: string}}
+                    {"keeper: {type: string, description: Who keeps the station.}" if on_parent else ""}
+                Lighthouse:
+                  allOf:
+                    - $ref: '#/components/schemas/Station'
+                    - properties:
+                        height: {{type: number}}
+                        {"" if on_parent else "keeper: {type: string, description: Who keeps it.}"}
+            """)
+    root = write({"a/openapi.yaml": spec(False), "b/openapi.yaml": spec(True)})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    moved = [c for c in s.compare("Lighthouse", "a", "b").changes if c.kind == "field-moved"]
+    assert [(c.where, c.before, c.after, c.level) for c in moved] == [
+        ("keeper", "own", "inherited from Station", "info")]
+    assert "field moved: keeper (own -> inherited from Station)" in s.compare("Lighthouse", "a", "b").to_text()
+    assert ("field-moved", "", "info") in kinds(s.compare("Lighthouse.keeper", "a", "b"))
+    assert "field moved: keeper (inherited from Station -> own)" in s.compare("Lighthouse", "b", "a").to_text()
+    assert not [c for c in s.compare("Lighthouse", "a", "b").changes if c.kind.startswith("field-")
+                and c.kind != "field-moved"]
+
+
 def test_a_removed_schema_that_looks_renamed_gets_a_hint(write):
     fields = "{id: {type: string}, distance: {type: integer}, speed: {type: number}, eta: {type: string}}"
     old = HEAD + dedent(f"""
