@@ -783,6 +783,14 @@ _CONDITION = re.compile(r"\b(?:if|when|whenever|unless|depending|depends|conditi
                         r"in some|in certain|either|recommended)\b", re.I)
 
 
+# A condition that only says the value is there, which every limit assumes: "if the field is present", "when
+# provided". It does not make a limit conditional.
+_PRESENCE = re.compile(r"\b(?:if|when|whenever)\s+(?:(?:it|they|the\s+\w+|this\s+\w+|`[^`]+`)(?:\s+\w+)?\s+"
+                       r"(?:is|are)\s+)?(?:present|provided|included|supplied|sent|given|set|specified)"
+                       r"(?=\s*(?:[,.;:)]|$|\b(?:and|or|but|then|it|they|the|its|their)\b))",
+                       re.IGNORECASE)
+
+
 _NOW = re.compile(r"\b(?:new|newly|now|became|becomes|no longer|added|introduced|since)\b", re.I)
 
 
@@ -1177,7 +1185,7 @@ def _check_limits(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
                                         else None)
             if not clause_lead and referred and (_REFERS.search(clause) or re.search(r"\bits?\b", clause, re.IGNORECASE)):
                 clause_lead = referred  # "Although the field is optional, it has ..."
-            if _CONDITION.search(_CODE.sub(" ", clause)):
+            if _CONDITION.search(_PRESENCE.sub(" ", _CODE.sub(" ", clause))):
                 continue
             labels = _labels_in(clause, ev.labels) or (in_sentence if len(in_sentence) == 1 else []) or \
                 ([section] if section else [])
