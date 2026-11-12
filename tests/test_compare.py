@@ -839,3 +839,30 @@ def test_a_field_renamed_on_a_parent_is_one_rename_naming_who_inherits_it(write)
          "why": "the same name but for case or separators", "inherited_by": ["Cat", "Dog"]}]
     assert ("possibly renamed: field Animal.nickName -> nickname (inherited by Cat, Dog) "
             "(the same name but for case or separators)") in d.to_text().splitlines()
+
+
+def test_a_renamed_field_now_written_elsewhere_is_said_once_where_it_was_written(write):
+    spec = """
+        paths: {}
+        components:
+          schemas:
+            Base:
+              properties:
+                %s
+            Zebra:
+              %s
+              properties:
+                %s
+            Ant:
+              allOf: [%s]
+        """
+    # Zebra writes `spot` and Ant inherits it; then both inherit `spots` from Base.
+    old = spec % ("id: {type: string}", "", "spot: {type: string}", "{$ref: '#/components/schemas/Zebra'}")
+    new = spec % ("spots: {type: string}", "allOf: [{$ref: '#/components/schemas/Base'}]", "{}",
+                  "{$ref: '#/components/schemas/Zebra'}")
+    root = write({"a/openapi.yaml": HEAD + dedent(old), "b/openapi.yaml": HEAD + dedent(new)})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    renames = [r for r in s.diff("a", "b").possible_field_renames if r["from"] == "spot"]
+    assert [(r["schema"], r.get("inherited_by")) for r in renames] == [("Zebra", ["Ant"])]
