@@ -955,6 +955,22 @@ def _field(spec, name: str) -> Node | None:
     return spec.graph.nodes[ids[0]] if ids else None
 
 
+def _inherited_once(renames: list[dict], graph: Graph, schemas: dict) -> list[dict]:
+    """Each field rename once, on the schema that writes the field: the schemas that inherit it are named in
+    `inherited_by`, not given a rename of their own."""
+    groups: dict[tuple, list[dict]] = {}
+    for r in renames:
+        held = _fields(graph, schemas[r["schema"]]).get(r["to"])
+        writer = _writer(graph, held[1]) if held else r["schema"]
+        groups.setdefault((writer, r["from"], r["to"]), []).append(r)
+    out = []
+    for (writer, _, _), rs in groups.items():
+        first = next((r for r in rs if r["schema"] == writer), rs[0])
+        heirs = sorted(r["schema"] for r in rs if r is not first)
+        out.append({**first, "inherited_by": heirs} if heirs else first)
+    return out
+
+
 def _field_edge(spec, name: str, field: Node):
     """The edge by which the schema `name` names holds this field."""
     schema = _find(spec, g.SCHEMA, name.rsplit(".", 1)[0])
@@ -1003,7 +1019,8 @@ class SpecDiff(Result):
         for old, hint in self.possible_renames.items():
             lines.append(f"possibly renamed: {old} -> {hint['to']} ({hint['why']})")
         for r in self.possible_field_renames:
-            lines.append(f"possibly renamed: field {r['schema']}.{r['from']} -> {r['to']} ({r['why']})")
+            heirs = f" (inherited by {', '.join(r['inherited_by'])})" if r.get("inherited_by") else ""
+            lines.append(f"possibly renamed: field {r['schema']}.{r['from']} -> {r['to']}{heirs} ({r['why']})")
         for r in self.possible_parameter_renames:
             n = len(r["operations"])
             lines.append(f"possibly renamed: {r['in']} parameter {r['from']} -> {r['to']} in {n} operation"
@@ -1090,6 +1107,7 @@ def diff(a, b) -> SpecDiff:
         if len(removed_) == 1 and len(added_) == 1 and removed_[0].before == added_[0].after:
             field_renames.append({"schema": name, "from": removed_[0].where, "to": added_[0].where,
                                   "why": f"the only field removed and the only one added, both {added_[0].after}"})
+    field_renames = _inherited_once(field_renames, b.graph, sch_b)
     result = SpecDiff(a.label, b.label, sorted(set(ops_b) - set(ops_a)), removed, changed,
                     [op for op in removed if ops_a[op].data.get("deprecated")],
                     schemas_added, schemas_removed, schemas_changed,
