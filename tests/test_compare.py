@@ -866,3 +866,27 @@ def test_a_renamed_field_now_written_elsewhere_is_said_once_where_it_was_written
     s.load(root / "b/openapi.yaml", "b")
     renames = [r for r in s.diff("a", "b").possible_field_renames if r["from"] == "spot"]
     assert [(r["schema"], r.get("inherited_by")) for r in renames] == [("Zebra", ["Ant"])]
+
+
+def test_what_a_field_says_about_itself_is_one_change_when_its_type_is_written_inline(write):
+    spec = """
+        paths: {}
+        components:
+          schemas:
+            Box:
+              properties:
+                tags: {type: array, description: %s, items: {type: string}}
+                dims: {type: object, description: %s, properties: {w: {type: integer}}}
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(spec % ("Old.", "Old.")),
+                  "b/openapi.yaml": HEAD + dedent(spec.replace("description: %s, items",
+                                                               "description: %s, deprecated: true, items")
+                                                  % ("New.", "New."))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    r = s.compare("Box", "a", "b")
+    # The field and its inline type are one object in the spec: each change once, cited on the field.
+    assert sorted((c.kind, c.where) for c in r.changes) == [
+        ("deprecated", "tags"), ("description-changed", "dims"), ("description-changed", "tags")]
+    assert "schema/Box.tags]" not in r.to_text()

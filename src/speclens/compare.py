@@ -373,7 +373,12 @@ class _Comparer:
         """(changes, children) for one pair of schemas: what they say themselves, their fields, and the pairs
         below them as (step, pair key)."""
         ga, gb = self.ga, self.gb
-        out, kids = self.values(sa.data, sb.data, "", None, sa.id, sb.id), []
+        # A field's type written inline is the same object as the field: what both say (its description,
+        # deprecated, ...) is compared once, on the field.
+        said = _said_by_field(ga, sa) & _said_by_field(gb, sb)
+        out = self.values({k: v for k, v in sa.data.items() if k not in said},
+                          {k: v for k, v in sb.data.items() if k not in said}, "", None, sa.id, sb.id)
+        kids = []
         any_a, any_b = _allows_anything(ga, sa), _allows_anything(gb, sb)
         if any_a != any_b:
             kind = "became-any" if any_b else "no-longer-any"
@@ -791,9 +796,12 @@ def _structured(graph: Graph, node: Node) -> bool:
     return any(graph.outgoing(node.id, k) for k in (g.HAS_FIELD, g.ITEMS, g.OPTION, g.VALUES))
 
 
+_ANNOTATIONS = ("description", "deprecated", "readOnly", "writeOnly", "default")
+
+
 def _annotations(data: dict) -> dict:
     # Beside a $ref only these say anything about the field itself; its type comes from the schema.
-    return {k: data[k] for k in ("description", "deprecated", "readOnly", "writeOnly", "default") if k in data}
+    return {k: data[k] for k in _ANNOTATIONS if k in data}
 
 
 def _fields(graph: Graph, schema: Node) -> dict:
@@ -801,6 +809,18 @@ def _fields(graph: Graph, schema: Node) -> dict:
     for e in graph.outgoing(schema.id, g.HAS_FIELD):
         name = graph.nodes[e.target].data["name"]
         out.setdefault(name, (graph.nodes[e.target], e))
+    return out
+
+
+def _said_by_field(graph: Graph, schema: Node) -> set[str]:
+    """The annotations an inline schema shares with the field it is the type of: the same object, compared on
+    the field."""
+    if schema.data.get("named"):
+        return set()
+    out = set()
+    for e in graph.incoming(schema.id, g.FIELD_TYPE):
+        f = graph.nodes[e.source].data
+        out |= {k for k in _ANNOTATIONS if f.get(k) == schema.data.get(k)}
     return out
 
 
