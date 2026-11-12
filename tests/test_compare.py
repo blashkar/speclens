@@ -812,3 +812,30 @@ def test_the_same_bound_or_value_written_another_way_is_no_change(write):
     assert (load.kind, load.before, load.after) == ("constraint-loosened", "exclusiveMaximum 10", "maximum 10")
     assert {(c.kind, c.before, c.after) for c in s.compare("Ring.mode", "a", "b").changes} == {
         ("enum-value-added", None, "'b'"), ("enum-value-removed", "'a'", None)}
+
+
+def test_a_field_renamed_on_a_parent_is_one_rename_naming_who_inherits_it(write):
+    spec = """
+        paths: {}
+        components:
+          schemas:
+            Animal:
+              properties:
+                %s: {type: string}
+            Cat:
+              allOf: [{$ref: '#/components/schemas/Animal'}, {properties: {lives: {type: integer}}}]
+            Dog:
+              allOf: [{$ref: '#/components/schemas/Animal'}]
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(spec % "nickName"),
+                  "b/openapi.yaml": HEAD + dedent(spec % "nickname")})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    d = s.diff("a", "b")
+    # Said once, where the field is written; the schemas that inherit it are named, not given renames of their own.
+    assert d.possible_field_renames == [
+        {"schema": "Animal", "from": "nickName", "to": "nickname",
+         "why": "the same name but for case or separators", "inherited_by": ["Cat", "Dog"]}]
+    assert ("possibly renamed: field Animal.nickName -> nickname (inherited by Cat, Dog) "
+            "(the same name but for case or separators)") in d.to_text().splitlines()
