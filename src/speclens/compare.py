@@ -934,14 +934,22 @@ def compare(a, b, name: str) -> Comparison:
             changes = c.operations(oa, ob)
         return Comparison("operation", op_name, a.label, b.label, oa and oa.id, ob and ob.id, "request", changes)
 
-    sa, sb = _find(a, g.SCHEMA, name), _find(b, g.SCHEMA, name)
+    # A field's dotted name (`Pet.tags`) is the field, even where its type is written inline and so also has
+    # that name: a type moved into a schema of its own is not the field removed.
+    as_field = "." in name and bool(_field(a, name) or _field(b, name))
+
+    def schema(spec, n, plain=True):
+        s = _find(spec, g.SCHEMA, n, plain)
+        return None if s is None or as_field and not s.data.get("named") else s
+
+    sa, sb = schema(a, name), schema(b, name)
     if sa and sb and sa.name != sb.name:  # found by plain words as two different schemas
-        sb = _find(b, g.SCHEMA, sa.name, False) or sb
+        sb = schema(b, sa.name, False) or sb
     if sa or sb:
         if sa and not sb:
-            sb = _find(b, g.SCHEMA, sa.name, False)
+            sb = schema(b, sa.name, False)
         if sb and not sa:
-            sa = _find(a, g.SCHEMA, sb.name, False)
+            sa = schema(a, sb.name, False)
         side = _side(b, sb.id) if sb else _side(a, sa.id)
         if not sa or not sb:
             kind = "schema-added" if sb else "schema-removed"

@@ -942,3 +942,36 @@ def test_what_a_field_says_about_itself_is_reported_on_every_way_to_it(write):
     assert kinds("Pet") == [("deprecated", ""), ("description-changed", "")]
     # Inline on one side, a $ref on the other: what applies, once. Moved unchanged into a schema: nothing.
     assert kinds("Box") == [("description-changed", "tags"), ("undeprecated", "tags")]
+
+
+def test_a_fields_dotted_name_is_the_field_whether_its_type_is_inline_or_a_schema(write):
+    spec = """
+        paths: {}
+        components:
+          schemas:
+            Box:
+              properties:
+                tags: %s
+                dims: {type: object, description: %s, properties: {w: {type: integer}}}
+            Crate:
+              allOf: [{$ref: '#/components/schemas/Box'}]
+            Tags: {type: array, description: Old., items: {type: string}}
+            v1.Lid: {type: object, description: %s}
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(spec % ("{type: array, description: Old., items: {type: string}}",
+                                                          "Old.", "Old.")),
+                  "b/openapi.yaml": HEAD + dedent(spec % ("{$ref: '#/components/schemas/Tags'}", "New.", "New."))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    # Its inline type moved into a schema of its own, the same words: not "schema removed", and no change.
+    for name in ("Box.tags", "Crate.tags"):
+        r = s.compare(name, "a", "b")
+        assert (r.what, r.changes) == ("field", [])
+    # Inline on both sides: the field, by its own name or through inheritance alike.
+    for name in ("Box.dims", "Crate.dims"):
+        r = s.compare(name, "a", "b")
+        assert r.what == "field" and [(c.kind, c.b) for c in r.changes] == [("description-changed", "b:field/Box.dims")]
+    # A schema whose name has a dot is still that schema.
+    r = s.compare("v1.Lid", "a", "b")
+    assert r.what == "schema" and [c.kind for c in r.changes] == ["description-changed"]
