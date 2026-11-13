@@ -890,3 +890,55 @@ def test_what_a_field_says_about_itself_is_one_change_when_its_type_is_written_i
     assert sorted((c.kind, c.where) for c in r.changes) == [
         ("deprecated", "tags"), ("description-changed", "dims"), ("description-changed", "tags")]
     assert "schema/Box.tags]" not in r.to_text()
+
+
+def test_what_a_field_says_about_itself_is_reported_on_every_way_to_it(write):
+    spec = """
+        paths:
+          /x:
+            get:
+              parameters: [{name: q, in: query, schema: {$ref: '#/components/schemas/Foo/properties/bar'}}]
+              responses:
+                '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Foo/properties/bar'}}}}
+        components:
+          schemas:
+            Foo:
+              properties:
+                bar: {type: array, description: %s, %s items: {type: string, description: %s}}
+            X:
+              properties:
+                baz: {$ref: '#/components/schemas/Foo/properties/bar'}
+            Pet:
+              description: %s
+              %s
+              properties: {name: {type: string}}
+            Box:
+              properties:
+                tags: %s
+                kept: %s
+            Tags: {type: array, items: {type: string}}
+            Kept: {type: array, description: Kept., deprecated: true, items: {type: string}}
+        """
+    old = spec % ("Old.", "", "A tag.", "A pet.", "", "{type: array, description: Old., deprecated: true, items: {type: string}}",
+                  "{type: array, description: Kept., deprecated: true, items: {type: string}}")
+    new = spec % ("New.", "deprecated: true,", "A label.", "A cat.", "deprecated: true",
+                  "{$ref: '#/components/schemas/Tags', description: New.}", "{$ref: '#/components/schemas/Kept'}")
+    root = write({"a/openapi.yaml": HEAD + dedent(old), "b/openapi.yaml": HEAD + dedent(new)})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+
+    def kinds(name):
+        return sorted((c.kind, c.where) for c in s.compare(name, "a", "b").changes)
+
+    # By the field's dotted name, by a field, a parameter and a response that point into it: never lost.
+    assert kinds("Foo.bar") == [("deprecated", ""), ("description-changed", ""), ("description-changed", "[]")]
+    assert ("deprecated", "baz") in kinds("X") and ("description-changed", "baz") in kinds("X")
+    assert {("deprecated", "parameter query q"), ("deprecated", "response 200 application/json")} <= set(kinds("GET /x"))
+    assert "GET /x" in s.diff("a", "b").operations_changed
+    # On the owning schema, once each, the inline items' own description too.
+    assert kinds("Foo") == [("deprecated", "bar"), ("description-changed", "bar"), ("description-changed", "bar[]")]
+    # A named schema's own words.
+    assert kinds("Pet") == [("deprecated", ""), ("description-changed", "")]
+    # Inline on one side, a $ref on the other: what applies, once. Moved unchanged into a schema: nothing.
+    assert kinds("Box") == [("description-changed", "tags"), ("undeprecated", "tags")]

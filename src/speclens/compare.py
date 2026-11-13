@@ -373,12 +373,7 @@ class _Comparer:
         """(changes, children) for one pair of schemas: what they say themselves, their fields, and the pairs
         below them as (step, pair key)."""
         ga, gb = self.ga, self.gb
-        # A field's type written inline is the same object as the field: what both say (its description,
-        # deprecated, ...) is compared once, on the field.
-        said = _said_by_field(ga, sa) & _said_by_field(gb, sb)
-        out = self.values({k: v for k, v in sa.data.items() if k not in said},
-                          {k: v for k, v in sb.data.items() if k not in said}, "", None, sa.id, sb.id)
-        kids = []
+        out, kids = self.values(sa.data, sb.data, "", None, sa.id, sb.id), []
         any_a, any_b = _allows_anything(ga, sa), _allows_anything(gb, sb)
         if any_a != any_b:
             kind = "became-any" if any_b else "no-longer-any"
@@ -521,8 +516,15 @@ class _Comparer:
         ta = [e.target for e in self.ga.outgoing(na.id, edge_kind)]
         tb = [e.target for e in self.gb.outgoing(nb.id, edge_kind)]
         if ta and tb:
-            out, kids = self.matched(self.ga.nodes[ta[0]], self.gb.nodes[tb[0]], where)
-            return self.values(_annotations(na.data), _annotations(nb.data), where, None, na.id, nb.id) + out, kids
+            sa, sb = self.ga.nodes[ta[0]], self.gb.nodes[tb[0]]
+            out, kids = self.matched(sa, sb, where)
+            if edge_kind != g.FIELD_TYPE:
+                return self.values(_annotations(na.data), _annotations(nb.data), where, None, na.id, nb.id) + out, \
+                    kids
+            # What the field says about itself, on the field: its own words, else its type's. A type written
+            # inline is the same object as the field, so what the field said is not said again by the type.
+            said, kinds = self.annotations(na, sa, nb, sb, where)
+            return said + out, [(step, key, kinds) for step, key in kids]
         if not ta and not tb:
             return self.values(na.data, nb.data, where, None, na.id, nb.id), []
         # Written inline on one side, a schema on the other: compare what each one is.
@@ -556,21 +558,40 @@ class _Comparer:
                                        na.id, nb.id))
         return out, []
 
-    def reach(self, roots: list[tuple[str, tuple]], side: str) -> list[Change]:
-        """Every change in the pairs reachable from `roots` ((where, pair key)), rated for `side`, each
-        `where` the shortest way from a root."""
+    def annotations(self, fa: Node, ta: Node, fb: Node, tb: Node, where: str) -> tuple[list[Change], frozenset]:
+        """A field's description, deprecated, readOnly, writeOnly and default as they apply, for those the field
+        says itself on either side: its own, else its type's, each change citing whichever said it. With the kinds
+        of change the type is then not to report again. What only the types say is left to the types."""
+        groups: dict[tuple, list[str]] = {}
+        for k in _ANNOTATIONS:
+            if k in fa.data or k in fb.data:
+                groups.setdefault((fa.id if k in fa.data else ta.id, fb.id if k in fb.data else tb.id),
+                                  []).append(k)
+        out = []
+        for (a, b), keys in groups.items():
+            da, db = self.ga.nodes[a].data, self.gb.nodes[b].data
+            out += self.values({k: da[k] for k in keys if k in da}, {k: db[k] for k in keys if k in db}, where, None,
+                               a, b)
+        return out, frozenset(kind for keys in groups.values() for k in keys for kind in _ANNOTATION_KINDS[k])
+
+    def reach(self, roots: list[tuple], side: str) -> list[Change]:
+        """Every change in the pairs reachable from `roots` ((where, pair key), or (where, pair key, kinds) for a
+        field's type: the kinds of its own change the field has already said), rated for `side`, each `where` the
+        shortest way from a root."""
         self.build()
         out, seen, queue = [], set(), deque(roots)
         while queue:
-            where, key = queue.popleft()
+            where, key, *said = queue.popleft()
+            said = said[0] if said else frozenset()
             if key in seen:
                 continue
             seen.add(key)
             if self.pairs[key] is None:
                 continue  # being compared further up: its changes are reported there
             changes, children = self.pairs[key]
-            out += [_rated(c, side, _join(where, c.where)) for c in changes]
-            queue.extend((_join(where, step), child) for step, child in children)
+            out += [_rated(c, side, _join(where, c.where)) for c in changes
+                    if c.where or c.kind not in said]
+            queue.extend((_join(where, step), child, *rest) for step, child, *rest in children)
         return out
 
     def operations(self, oa: Node, ob: Node) -> list[Change]:
@@ -776,8 +797,7 @@ def _nullable(data: dict) -> bool:
 
 def _allows_anything(graph: Graph, node: Node) -> bool:
     """`{}`: no type, no constraint, nothing below it. Not the same as a schema whose type comes from a parent."""
-    constraining = {k for k in node.data if k not in ("title", "description", "named", "required", "deprecated",
-                                                       "readOnly", "writeOnly", "default", "effective_required")}
+    constraining = {k for k in node.data if k not in ("title", "named", "required", "effective_required", *_ANNOTATIONS)}
     return not constraining and not node.data.get("required") and not any(graph.outgoing(node.id))
 
 
@@ -797,6 +817,9 @@ def _structured(graph: Graph, node: Node) -> bool:
 
 
 _ANNOTATIONS = ("description", "deprecated", "readOnly", "writeOnly", "default")
+_ANNOTATION_KINDS = {"description": ("description-changed",), "deprecated": ("deprecated", "undeprecated"),
+                     "readOnly": ("read-only-changed",), "writeOnly": ("write-only-changed",),
+                     "default": ("default-changed",)}
 
 
 def _annotations(data: dict) -> dict:
@@ -809,18 +832,6 @@ def _fields(graph: Graph, schema: Node) -> dict:
     for e in graph.outgoing(schema.id, g.HAS_FIELD):
         name = graph.nodes[e.target].data["name"]
         out.setdefault(name, (graph.nodes[e.target], e))
-    return out
-
-
-def _said_by_field(graph: Graph, schema: Node) -> set[str]:
-    """The annotations an inline schema shares with the field it is the type of: the same object, compared on
-    the field."""
-    if schema.data.get("named"):
-        return set()
-    out = set()
-    for e in graph.incoming(schema.id, g.FIELD_TYPE):
-        f = graph.nodes[e.source].data
-        out |= {k for k in _ANNOTATIONS if f.get(k) == schema.data.get(k)}
     return out
 
 
