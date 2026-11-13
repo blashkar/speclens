@@ -1064,7 +1064,9 @@ def test_something_added_inside_a_field_is_not_the_field_added(write):
                      "- **Enum value added**: `'lost'` was added to the allowed values of `status` in 2.0.",
                      "In 2.0, `age` in `Pet` now has a `minimum` constraint of 0.",
                      "The field `age` in `Pet` now has both a minimum (0) and a maximum (30) in 2.0.",
-                     "In 2.0, a minimum of 0 was added to `age`."):
+                     "In 2.0, a minimum of 0 was added to `age`.",
+                     "In 2.0, `status` added the enum value `lost`.",
+                     "In 2.0, `age` has added a maximum of 30."):
             r = verify(said, ev)
             assert r.ok, (said, r.to_text())
         # The field itself was there before.
@@ -1073,7 +1075,8 @@ def test_something_added_inside_a_field_is_not_the_field_added(write):
     rows = [s.compare("Pet", "1.0", "2.0"), s.get_schema("Pet", "1.0"), s.get_schema("Pet", "2.0")]
     assert verify("In 2.0, `lost` was added to the `wasStatus` enum.", rows).ok
     # Made up: the comparison covers `name`, and shows nothing of that kind changed there.
-    for said in ("In 2.0, a maximum of 9 was added to `name`.", "In 2.0, `name` in `Pet` gained a pattern."):
+    for said in ("In 2.0, a maximum of 9 was added to `name`.", "In 2.0, `name` in `Pet` gained a pattern.",
+                 "In 2.0, `name` has added a maximum of 9."):
         assert [f.kind for f in verify(said, rows).findings] == ["unsupported-claim"], said
 
 
