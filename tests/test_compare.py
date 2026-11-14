@@ -987,3 +987,23 @@ def test_a_fields_dotted_name_is_the_field_whether_its_type_is_inline_or_a_schem
     # A schema whose name has a dot is still that schema.
     r = s.compare("v1.Lid", "a", "b")
     assert r.what == "schema" and [c.kind for c in r.changes] == ["description-changed"]
+
+
+def test_a_default_is_compared_as_the_json_value_it_is(write):
+    spec = """
+        paths: {}
+        components:
+          schemas:
+            Gauge:
+              properties:
+                level: {type: number, default: .nan}
+                on: {default: %s}
+                range: {type: array, default: [0, .nan]}
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(spec % "1"), "b/openapi.yaml": HEAD + dedent(spec % "true")})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    # NaN on both sides is the same default; 1 and true are different values.
+    assert [(c.kind, c.where, c.before, c.after) for c in s.compare("Gauge", "a", "b").changes] == [
+        ("default-changed", "on", "1", "True")]
