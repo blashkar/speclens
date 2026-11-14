@@ -1001,7 +1001,8 @@ class _Builder:
                 base, i = f"{t[2].upper()} {path}", 3
             else:
                 base, i = path, 2
-        elif len(t) >= 2 and t[0] in ("$defs", "definitions"):
+        elif len(t) >= 2 and (t[0] in ("$defs", "definitions") or t[0].startswith("x-")):
+            # A schema kept under an extension key (`#/x-schemas/Box`) is named by its key, as one under $defs.
             base, i = t[1], 2
         elif not (isinstance(doc.data, dict) and "openapi" in doc.data):
             if t and (doc.name, "") not in self.node_roots:
