@@ -716,6 +716,18 @@ def test_a_diff_says_what_looks_renamed_first_and_lists_every_change_in_full(wri
     full = d.to_text(full=True)
     assert "info: field added: arrival" in full and "info: field removed: eta" in full
     assert "field added: arrival" not in d.to_text()
+    # Comparing the schema gives the same hints, each with the two fields it pairs, beside the field removed
+    # and the field added.
+    hints = [(c.before, c.after, c.a, c.b, c.level, c.note) for c in s.compare("Pet", "a", "b").changes
+             if c.kind == "possibly-renamed"]
+    assert hints == [("callSign", "callsign", "a:field/Pet.callSign", "b:field/Pet.callsign", "info",
+                      "the same name but for case or separators"),
+                     ("eta", "arrival", "a:field/Pet.eta", "b:field/Pet.arrival", "info",
+                      "the only field removed and the only one added, both string (date-time)")]
+    text = s.compare("Pet", "a", "b").to_text()
+    assert "info: possibly renamed (eta -> arrival) [b:field/Pet.arrival]" in text and "field removed: eta" in text
+    # A field compared on its own is not paired with anything.
+    assert all(c.kind != "possibly-renamed" for c in s.compare("Pet.eta", "a", "b").changes)
 
 
 def test_a_diff_lists_a_shared_breaking_change_once_and_guesses_only_lone_renames(write):

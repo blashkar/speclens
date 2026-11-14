@@ -961,6 +961,10 @@ def compare(a, b, name: str) -> Comparison:
                                                        new.id), side, ""), note=why))
         else:
             changes = c.schema(sa, sb, side)
+            # The same hint a diff gives: `eta` removed and `arrival` added look like one field renamed.
+            changes += [replace(_rated(c.change("possibly-renamed", gone.where, gone.where, new.where, None, gone.a,
+                                                new.b), side, ""), note=why)
+                        for gone, new, why in _field_renames(changes)]
         return Comparison("schema", (sb or sa).name, a.label, b.label, sa and sa.id, sb and sb.id, side, changes)
 
     if "." in name:
@@ -1133,23 +1137,8 @@ def diff(a, b) -> SpecDiff:
     removed = sorted(set(ops_a) - set(ops_b))
     schemas_removed, schemas_added = sorted(set(sch_a) - set(sch_b)), sorted(set(sch_b) - set(sch_a))
     renames = _renames(a.graph, b.graph, [sch_a[n] for n in schemas_removed], [sch_b[n] for n in schemas_added])
-    field_renames = []
-    for name, changes in schemas_changed.items():
-        removed_ = [c for c in changes if c.kind in ("field-removed", "required-field-removed") and "." not in c.where]
-        added_ = [c for c in changes if c.kind in ("field-added", "required-field-added") and "." not in c.where]
-        gone = {key(c.where): c for c in removed_}
-        paired = set()
-        for c in added_:
-            if key(c.where) in gone and gone[key(c.where)].where != c.where:
-                field_renames.append({"schema": name, "from": gone[key(c.where)].where, "to": c.where,
-                                      "why": "the same name but for case or separators"})
-                paired |= {id(c), id(gone[key(c.where)])}
-        removed_ = [c for c in removed_ if id(c) not in paired]
-        added_ = [c for c in added_ if id(c) not in paired]
-        # The only field gone and the only one added, of the same type: eta -> estimatedArrival.
-        if len(removed_) == 1 and len(added_) == 1 and removed_[0].before == added_[0].after:
-            field_renames.append({"schema": name, "from": removed_[0].where, "to": added_[0].where,
-                                  "why": f"the only field removed and the only one added, both {added_[0].after}"})
+    field_renames = [{"schema": name, "from": gone.where, "to": new.where, "why": why}
+                     for name, changes in schemas_changed.items() for gone, new, why in _field_renames(changes)]
     field_renames = _inherited_once(field_renames, a.graph, sch_a, b.graph, sch_b)
     result = SpecDiff(a.label, b.label, sorted(set(ops_b) - set(ops_a)), removed, changed,
                     [op for op in removed if ops_a[op].data.get("deprecated")],
@@ -1159,6 +1148,25 @@ def diff(a, b) -> SpecDiff:
                     sorted(set(a.graph.security_schemes) - set(b.graph.security_schemes)), field_renames,
                     _parameter_renames(changed))
     return result
+
+
+def _field_renames(changes: list[Change]) -> list[tuple[Change, Change, str]]:
+    """(field removed, field added, why) for the fields of one schema that look renamed: the same name but for
+    case or separators, or the only field removed and the only one added, of the same type (eta ->
+    estimatedArrival). A hint, never a fact."""
+    removed = [c for c in changes if c.kind in ("field-removed", "required-field-removed") and "." not in c.where]
+    added = [c for c in changes if c.kind in ("field-added", "required-field-added") and "." not in c.where]
+    gone = {key(c.where): c for c in removed}
+    out, paired = [], set()
+    for c in added:
+        if key(c.where) in gone and gone[key(c.where)].where != c.where:
+            out.append((gone[key(c.where)], c, "the same name but for case or separators"))
+            paired |= {id(c), id(gone[key(c.where)])}
+    removed = [c for c in removed if id(c) not in paired]
+    added = [c for c in added if id(c) not in paired]
+    if len(removed) == 1 and len(added) == 1 and removed[0].before == added[0].after:
+        out.append((removed[0], added[0], f"the only field removed and the only one added, both {added[0].after}"))
+    return out
 
 
 def _parameter_renames(changed: dict[str, list[Change]]) -> list[dict]:
