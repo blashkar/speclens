@@ -11,6 +11,7 @@ them are a matter of policy that some API owners decide otherwise: a new enum va
 in a response are breaking, since a client that handles every known value can fail on a new one.
 """
 
+import math
 import re
 from collections import deque
 from dataclasses import dataclass, field, replace
@@ -176,6 +177,20 @@ class Change:
 
 
 _PAIRED = {"options-unwrapped", "options-wrapped"}
+
+
+def _same_value(x, y) -> bool:
+    """Two values from a spec are the same JSON value: NaN is the same as NaN (YAML's `.nan` is not equal to
+    itself in Python), and `true` is not the same as `1` (equal in Python)."""
+    if isinstance(x, bool) or isinstance(y, bool):
+        return type(x) is type(y) and x == y
+    if isinstance(x, float) and isinstance(y, float) and math.isnan(x) and math.isnan(y):
+        return True
+    if isinstance(x, dict) and isinstance(y, dict):
+        return x.keys() == y.keys() and all(_same_value(x[k], y[k]) for k in x)
+    if isinstance(x, list) and isinstance(y, list):
+        return len(x) == len(y) and all(_same_value(a, b) for a, b in zip(x, y))
+    return x == y
 
 
 def _show(v) -> str:
@@ -345,7 +360,7 @@ class _Comparer:
         if pa != pb:
             kind = "pattern-added" if pa is None else "pattern-removed" if pb is None else "pattern-changed"
             out.append(self.change(kind, where, pa, pb, side, a, b))
-        if "default" in da and "default" in db and da["default"] != db["default"]:
+        if "default" in da and "default" in db and not _same_value(da["default"], db["default"]):
             out.append(self.change("default-changed", where, da["default"], db["default"], side, a, b))
         if bool(da.get("deprecated")) != bool(db.get("deprecated")):
             out.append(self.change("deprecated" if db.get("deprecated") else "undeprecated", where, None, None,
