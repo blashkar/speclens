@@ -205,7 +205,8 @@ A diff's text starts with what looks renamed: a schema whose fields or values ar
 name changed only in case or separators; a field that is the only one removed and the only one added in its
 schema, of the same type (`eta` -> `estimatedArrival`); and a parameter that is the only one removed and the
 only one added in its place (query, header, ...) of an operation, listed once with every operation it is in
-(`page` -> `cursor`, the types may differ). These are hints, each with its reason. Then each distinct breaking
+(`page` -> `cursor`, the types may differ). These are hints, each with its reason; comparing one schema gives
+the same hints for its fields, next to the field removed and the field added. Then each distinct breaking
 change once, in the first operation it breaks, with the other operations it breaks; then what was added and
 removed, and a count of the other changes. `full=True` lists every breaking change and those other changes too,
 by schema and by operation, and JSON always has every change.
