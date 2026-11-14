@@ -539,7 +539,9 @@ class _Builder:
         if isinstance(schema, dict):
             self.check_keywords(schema, doc, pointer.join(ptr, "schema"))
         if isinstance(schema, dict) and not (self.refers(schema) or STRUCTURAL & set(schema)):
-            data.update(_copy(schema, SCHEMA_DATA))
+            # A simple inline schema's keywords are the parameter's, but what the parameter says about itself
+            # (its description, deprecated) is kept over what its schema says.
+            data.update({k: v for k, v in _copy(schema, SCHEMA_DATA).items() if k not in data})
         self.add(g.PARAMETER, key[1], doc, ptr, data)
         if isinstance(schema, dict) and (self.refers(schema) or STRUCTURAL & set(schema)):
             s_ptr = pointer.join(ptr, "schema")
