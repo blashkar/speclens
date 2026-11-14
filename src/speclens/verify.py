@@ -225,6 +225,7 @@ class _Evidence:
         self.counts: list[_Countable] = []  # schemas and operations whose complete lists the evidence holds
         self.operations: dict[str, set[str]] = {}  # label -> operations shown to exist there
         self.methods: dict[tuple[str, str], set[str]] = {}  # (label, path) -> all the methods it has
+        self.types: dict[str, set[str]] = {}  # field or parameter name -> the types its rows show
         self._anywhere: set[str] | None = None
         for item in items:
             self.add(item)
@@ -292,6 +293,19 @@ class _Evidence:
         if owner:
             self.limits_in.setdefault((owner, name), {}).setdefault(label, {}).setdefault(keyword, set()).add(
                 float(value))
+
+    def add_types(self, d: dict):
+        """The type each field and parameter row shows: `Status (string enum [...])`, `array of Status`."""
+        stack = [d]
+        while stack:
+            v = stack.pop()
+            if isinstance(v, dict):
+                if isinstance(v.get("name"), str) and isinstance(v.get("type"), str) and \
+                        _ID.match(str(v.get("id", ""))):
+                    self.types.setdefault(v["name"], set()).add(v["type"])
+                stack.extend(v.values())
+            elif isinstance(v, (list, tuple)):
+                stack.extend(v)
 
     def add_limits(self, d: dict):
         """The limits each field and parameter row shows, in the version its id names."""
@@ -377,6 +391,7 @@ class _Evidence:
         self.names.update(n for v in _named(d) for n in _words_of(v))
         self.add_required(d)
         self.add_limits(d)
+        self.add_types(d)
         for m in d.get("mentions") or []:  # a path asked with a method it lacks: all the methods it has
             if isinstance(m, dict) and m.get("how") == "path (other method)":
                 ops = [s.split(":", 1) for s in m.get("ids") or [] if _ID.match(s)]
@@ -1645,6 +1660,26 @@ def _said_value(change: dict, clause: str) -> bool:
     return bool(value) and value != "none" and re.search(rf"(?<![\w.-]){re.escape(value)}(?![\w-]|\.\d)", clause) is not None
 
 
+def _enum_values_said(clause: str, name: str, containers: list[str], ev: _Evidence) -> set[str]:
+    """The values a clause about an enum gives in code: `lost`, `'lost'`; not the names of fields, schemas or
+    versions (in "`kind` and `category` gained new values", category is another field)."""
+    fields = set(ev.types) | {m for ms in ev.members.values() for _, m in ms} | {
+        f for fs in ev.field_lists.values() for f in fs}
+    out = set()
+    for code in re.findall(r"`([^`]+)`", clause):
+        v = code.strip().strip("'\"")
+        if v and v != name and v not in containers and v not in ev.schemas and v not in ev.labels \
+                and _path_name(code) != name and (v not in fields or code.strip()[:1] in "'\""):
+            out.add(v)
+    return out
+
+
+def _typed_as(types: set[str], change: dict) -> bool:
+    """One of a field's shown types is the named schema a change is at: `Status`, `array of Status`."""
+    schema = str(change.get("b") or change.get("a")).split("schema/", 1)[1]
+    return any(schema in _IDENT.findall(t) for t in types)
+
+
 def _check_inside(clause: str, family: str, name: str, containers: list[str], labels: list[str],
                   ev: _Evidence) -> list[Finding]:
     """A claim that something was added inside `name` (a value to its enum, a limit, a pattern): backed by a
@@ -1655,7 +1690,13 @@ def _check_inside(clause: str, family: str, name: str, containers: list[str], la
         changes = [(c, ch) for c, ch in _comparisons_about(ev, name) if c.get("b_label") == label and (
             not containers or c.get("name") in containers or str(c.get("name", "")).split(".")[0] in containers
             or any(x in str(ch.get("a") or ch.get("b")) for x in containers))]
-        if any(ch.get("kind") in _PART_CHANGES[family] for _, ch in changes):
+        # The change is about `name` itself, not an enum value that happens to be called that.
+        changes = [(c, ch) for c, ch in changes if name not in _values_of(ch)]
+        values = _enum_values_said(clause, name, containers, ev) if family == "enum" else set()
+        if values and values <= {v for _, ch in changes if ch.get("kind") in _PART_CHANGES[family]
+                                 for v in _values_of(ch)}:
+            continue  # "`lost` was added to the `status` enum": lost is a value added to status
+        if not values and any(ch.get("kind") in _PART_CHANGES[family] for _, ch in changes):
             continue
         # Comparisons of a schema that holds `name`: its own, its containers', or one whose field list has it
         covering = [c for c in ev.comparisons if c.get("b_label") == label and (
@@ -1663,9 +1704,12 @@ def _check_inside(clause: str, family: str, name: str, containers: list[str], la
             or c.get("name") in containers or name in ev.field_lists.get((label, c.get("name")), ())
             or (c.get("name"), name) in ev.members.get(label, set()))]
         # A change to a schema two fields share is listed once, at the first of them: a change of that kind to a
-        # named schema, with the value the claim gives, backs it too.
+        # named schema, with the value the claim gives, backs it too, unless the rows shown for `name` give it
+        # a type that is not that schema.
+        types = ev.types.get(name, set())
         if any(ch.get("kind") in _PART_CHANGES[family] and "schema/" in str(ch.get("b") or ch.get("a"))
-               and _said_value(ch, clause) for c in covering for ch in c.get("changes") or []):
+               and _said_value(ch, clause) and (not types or _typed_as(types, ch))
+               for c in covering for ch in c.get("changes") or []):
             continue
         covered = changes or covering
         if covered:

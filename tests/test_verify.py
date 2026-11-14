@@ -1052,6 +1052,8 @@ def test_something_added_inside_a_field_is_not_the_field_added(write):
                 age: {type: integer%s}
                 status: {$ref: '#/components/schemas/Status'}
                 wasStatus: {$ref: '#/components/schemas/Status'}
+                tags: {type: array, items: {$ref: '#/components/schemas/Status'}}
+                lost: {type: boolean}
         """
     root = write({"a/openapi.yaml": HEAD + dedent(pet % ("", "")),
                   "b/openapi.yaml": HEAD.replace("'1'", "'2'") + dedent(pet % (", lost", ", minimum: 0, maximum: 30"))})
@@ -1074,6 +1076,12 @@ def test_something_added_inside_a_field_is_not_the_field_added(write):
     # A change to a schema two fields share is listed once, at `status`: it backs a claim about `wasStatus` too.
     rows = [s.compare("Pet", "1.0", "2.0"), s.get_schema("Pet", "1.0"), s.get_schema("Pet", "2.0")]
     assert verify("In 2.0, `lost` was added to the `wasStatus` enum.", rows).ok
+    assert verify("In 2.0, `lost` was added to the `tags` enum.", rows).ok
+    # Not where the rows show `name` is a string, not that schema; not a value that was there already; and not
+    # to the field that has the added value's name.
+    for said in ("In 2.0, `lost` was added to the `name` enum.", "In 2.0, `sold` was added to the `status` enum.",
+                 "In 2.0, `status` added the enum value `sold`.", "In 2.0, `new` was added to the `lost` enum."):
+        assert [f.kind for f in verify(said, rows).findings] == ["unsupported-claim"], said
     # Made up: the comparison covers `name`, and shows nothing of that kind changed there.
     for said in ("In 2.0, a maximum of 9 was added to `name`.", "In 2.0, `name` in `Pet` gained a pattern.",
                  "In 2.0, `name` has added a maximum of 9."):
