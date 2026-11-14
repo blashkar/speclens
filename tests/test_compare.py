@@ -987,3 +987,32 @@ def test_a_fields_dotted_name_is_the_field_whether_its_type_is_inline_or_a_schem
     # A schema whose name has a dot is still that schema.
     r = s.compare("v1.Lid", "a", "b")
     assert r.what == "schema" and [c.kind for c in r.changes] == ["description-changed"]
+
+
+def test_a_schema_kept_under_an_extension_key_is_named_like_a_component(write):
+    spec = """
+        paths:
+          /box:
+            get:
+              responses:
+                '200': {description: ok, content: {application/json: {schema: {$ref: '#/x-schemas/Box'}}}}
+        x-schemas:
+          Box:
+            properties:
+              tags: {type: array, description: %s, items: {type: string}}
+              dims: {type: object, description: %s, properties: {w: {type: integer}}}
+        """
+    # Two versions in files named differently.
+    root = write({"v1.yaml": HEAD + dedent(spec % ("Old.", "Old.")), "v2.yaml": HEAD + dedent(spec % ("New.", "New."))})
+    s = SpecSet()
+    s.load(root / "v1.yaml", "a")
+    s.load(root / "v2.yaml", "b")
+    assert "b:field/Box.tags" in s.get("b").graph.nodes
+    # Its fields' inline types are part of it, not schemas of their own; and it is the same schema in both files.
+    d = s.diff("a", "b")
+    assert (d.schemas_added, d.schemas_removed, sorted(d.schemas_changed)) == ([], [], ["Box"])
+    assert [(c.kind, c.where) for c in s.compare("Box", "a", "b").changes] == [
+        ("description-changed", "tags"), ("description-changed", "dims")]
+    assert [(c.kind, c.where) for c in s.compare("GET /box", "a", "b").changes] == [
+        ("description-changed", "response 200 application/json: tags"),
+        ("description-changed", "response 200 application/json: dims")]
