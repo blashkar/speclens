@@ -1606,10 +1606,11 @@ _INSIDE = (
     # "a minimum of 5 was added to `x`", "a `minimum` constraint was added on `x`"
     re.compile(rf"\b(?P<p3>{_INNER})\b(?P<gap>[^`.;]{{0,40}}?)\s*`?\s*(?:was|were|is|are|has\s+been|have\s+been)?"
                rf"\s*added\s+(?:to|on|for)\s+(?:the\s+)?`(?P<n3>[^`]+)`", re.IGNORECASE),
-    # "`x` now has a minimum", "`x` in `Y` now has both a minimum and a maximum", "`x` gained a pattern"
+    # "`x` now has a minimum", "`x` in `Y` now has both a minimum and a maximum", "`x` gained a pattern",
+    # "`x` added the enum value `V`"
     re.compile(rf"(?:`(?P<n4>[^`]+)`(?:\s+(?:in|of|on)\s+(?:the\s+)?`[^`]+`)?(?:\s+(?:field|property|parameter))?"
                rf"\s+|\b(?:it|the\s+(?:field|property|parameter|value))\s+)(?:now\s+(?:has|have|carries)|gained|"
-               rf"gains|gets|got)\s+(?:both\s+)?(?:(?:an?|new|the)\s+)*`?(?P<p4>{_INNER})\b`?"
+               rf"gains|gets|got|(?:has\s+)?added|adds)\s+(?:both\s+)?(?:(?:an?|new|the)\s+)*`?(?P<p4>{_INNER})\b`?"
                r"(?!\s*(?:field|property|parameter|header|attribute|option|operation|schema)s?\b)", re.IGNORECASE),
 )
 _NOT_A_PART = re.compile(r"\b(?:field|property|parameter|header|attribute|option|operation|schema|endpoint)s?\b",
