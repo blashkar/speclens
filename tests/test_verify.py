@@ -1080,7 +1080,9 @@ def test_something_added_inside_a_field_is_not_the_field_added(write):
     # Not where the rows show `name` is a string, not that schema; not a value that was there already; and not
     # to the field that has the added value's name.
     for said in ("In 2.0, `lost` was added to the `name` enum.", "In 2.0, `sold` was added to the `status` enum.",
-                 "In 2.0, `status` added the enum value `sold`.", "In 2.0, `new` was added to the `lost` enum."):
+                 "In 2.0, `status` added the enum value `sold`.", "In 2.0, `new` was added to the `lost` enum.",
+                 # A field's name where the value goes is a value, and not one added there.
+                 "In 2.0, `tags` was added to the `status` enum.", "In 2.0, `status` added the enum value `tags`."):
         assert [f.kind for f in verify(said, rows).findings] == ["unsupported-claim"], said
     # Made up: the comparison covers `name`, and shows nothing of that kind changed there.
     for said in ("In 2.0, a maximum of 9 was added to `name`.", "In 2.0, `name` in `Pet` gained a pattern.",

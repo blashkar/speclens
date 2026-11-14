@@ -1662,16 +1662,25 @@ def _said_value(change: dict, clause: str) -> bool:
 
 def _enum_values_said(clause: str, name: str, containers: list[str], ev: _Evidence) -> set[str]:
     """The values a clause about an enum gives in code: `lost`, `'lost'`; not the names of fields, schemas or
-    versions (in "`kind` and `category` gained new values", category is another field)."""
+    versions (in "`kind` and `category` gained new values", category is another field). What the clause puts
+    where a value goes is a value even when a field has that name: "`tags` was added to the `x` enum", "`x`
+    added the enum value `tags`"."""
     fields = set(ev.types) | {m for ms in ev.members.values() for _, m in ms} | {
         f for fs in ev.field_lists.values() for f in fs}
+    placed = {m.group(1) for rx in _VALUE_PLACES for m in rx.finditer(clause)}
     out = set()
     for code in re.findall(r"`([^`]+)`", clause):
         v = code.strip().strip("'\"")
         if v and v != name and v not in containers and v not in ev.schemas and v not in ev.labels \
-                and _path_name(code) != name and (v not in fields or code.strip()[:1] in "'\""):
+                and _path_name(code) != name and (v not in fields or code.strip()[:1] in "'\"" or code in placed):
             out.add(v)
     return out
+
+
+_VALUE_PLACES = (
+    re.compile(r"`([^`]+)`\s+(?:(?:was|were|is|are|has\s+been|have\s+been)\s+)?added\s+(?:to|into)\b", re.IGNORECASE),
+    re.compile(r"\b(?:enum\s+)?values?\s+`([^`]+)`", re.IGNORECASE),
+)
 
 
 def _typed_as(types: set[str], change: dict) -> bool:
