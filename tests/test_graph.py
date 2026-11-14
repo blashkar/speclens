@@ -272,3 +272,24 @@ def test_webhooks_are_operations(spec):
     assert "v1:operation/POST webhook:newPet" in s.graph.nodes
     assert "v1:schema/POST webhook:newPet#request/application/json" in s.graph.nodes
     assert codes(s) == []
+
+
+def test_what_a_parameter_says_about_itself_is_kept_over_its_inline_schema(spec):
+    s = spec({"openapi.yaml": HEAD + dedent("""
+        paths:
+          /pets:
+            get:
+              parameters:
+                - name: limit
+                  in: query
+                  description: how many pets to list
+                  deprecated: true
+                  schema: {type: integer, description: a count, deprecated: false, maximum: 50}
+                - {name: sort, in: query, schema: {type: string, description: the order, deprecated: true}}
+              responses: {'200': {description: ok}}
+        """)})
+    limit = s.graph.nodes["v1:parameter/GET /pets#query/limit"].data
+    assert (limit["description"], limit["deprecated"], limit["maximum"]) == ("how many pets to list", True, 50)
+    # What the parameter does not say, its schema says for it.
+    sort = s.graph.nodes["v1:parameter/GET /pets#query/sort"].data
+    assert (sort["description"], sort["deprecated"]) == ("the order", True)
