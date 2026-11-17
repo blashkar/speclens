@@ -76,6 +76,10 @@ def query(spec, args) -> int:
 
 
 def two_specs(args) -> int:
+    if args.old_label is not None and args.old_label == args.new_label:
+        print(f"speclens: error: --old-label and --new-label are the same ({args.old_label!r}): give two different "
+              "labels", file=sys.stderr)
+        return 2
     old, new = load_spec(args.old, args.old_label), load_spec(args.new, args.new_label)
     if old.label == new.label:  # two releases with the same info.version, or none given
         old = load_spec(args.old, args.old_label or "old")

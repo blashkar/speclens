@@ -47,9 +47,16 @@ def _core(text: str):
     return text
 
 
+# A value's properties as written before it: a tag, an anchor, or both in either order (`&a !!str 123`).
+_TAG = re.compile(r"(?:&\S+\s+)?!")
+_NON_SPECIFIC = re.compile(r"(?:&\S+\s+)?!(?=\s)")  # a bare `!`: the value is text, whatever it looks like
+
+
 def _scalar(node, text: str):
     # Plain (style None from the Python parser, "" from libyaml), and no tag written before it.
-    tagged = text[node.start_mark.index:node.start_mark.index + 1] == "!"
+    tagged = _TAG.match(text, node.start_mark.index) is not None
+    if tagged and _NON_SPECIFIC.match(text, node.start_mark.index):
+        return node.value
     if not node.style and not tagged and node.tag in _IMPLICIT:
         return _core(node.value)
     if node.tag == "tag:yaml.org,2002:str":

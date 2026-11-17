@@ -123,3 +123,9 @@ def test_aliases_that_multiply_a_file_are_refused(tmp_path):
     doc = load_text(tmp_path, "\n".join(lines) + "\n")  # 3^30 values in 30 lines
     assert doc.data is None and [i.code for i in doc.issues] == ["too-large"]
     assert "YAML aliases" in doc.issues[0].message
+
+
+def test_a_tag_after_an_anchor_still_counts(tmp_path):
+    p = tmp_path / "a.yaml"
+    p.write_text("a: &x !!str 123\nb: *x\nc: !!str &y 456\nd: &z 789\ne: ! 10\nf: &w ! true\ng: !!int '11'\n")
+    assert load(p, "a.yaml").data == {"a": "123", "b": "123", "c": "456", "d": 789, "e": "10", "f": "true", "g": 11}
