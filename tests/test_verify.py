@@ -1119,3 +1119,14 @@ def test_formats_and_what_a_field_lacks_are_not_claims_that_it_is_absent(write):
     assert kinds(verify("`age` is an integer in 2.0. In 1.0 it is missing.", ev)) == [
         ("contradicted-claim", "In 1.0 it is missing.")]
     assert kinds(verify("`born` uses the `dateOfBirth` field.", ev)) == [("unknown-name", "dateOfBirth")]
+
+
+def test_ids_with_a_build_or_prerelease_label_are_read_whole(write):
+    root = write({"openapi.yaml": HEAD + "paths: {}\ncomponents:\n  schemas:\n    Pet: {type: object}\n"})
+    for label in ("1.0.0+build5", "2.0-beta", "1.0.0-rc.1"):
+        s = SpecSet()
+        s.load(root / "openapi.yaml", label)
+        r = verify(f"Pet is an object [{label}:schema/Pet openapi.yaml:4].", [s.get_schema("Pet")])
+        assert r.ok, (label, r.to_text())
+        r = verify(f"See [{label}:schema/Cat].", [s.get_schema("Pet")])
+        assert [(f.kind, f.text) for f in r.findings] == [("unknown-citation", f"{label}:schema/Cat")]

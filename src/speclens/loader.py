@@ -68,6 +68,7 @@ class Document:
     data: object = None
     lines: dict[str, tuple[int, int]] = field(default_factory=dict)  # pointer -> (first line, last line), 1-based
     parsed: str = field(default="", repr=False)  # the text the parser read; differs from `text` only if repaired
+    version_text: str | None = None  # `info.version` as written, for a label: `1.10` is not the number 1.1
     issues: list[Issue] = field(default_factory=list)
 
     def line_of(self, ptr: str) -> int | None:
@@ -121,8 +122,24 @@ def load(path: Path, name: str) -> Document:
         if refused:
             doc.issues.append(Issue(ERROR, "too-large", refused + "; the file is not read", name))
             return doc
+        doc.version_text = _info_version(node)
         doc.data, _ = _convert(node, "", doc, set())
     return doc
+
+
+def _info_version(root) -> str | None:
+    """The text of `info.version` as written (plain, quoted or a block), before it is read as a value."""
+    node = _under(_under(root, "info"), "version")
+    return node.value.strip() if isinstance(node, yaml.ScalarNode) else None
+
+
+def _under(node, key: str):
+    """The value node under `key` in a mapping node, or None."""
+    if isinstance(node, yaml.MappingNode):
+        for k, v in node.value:
+            if isinstance(k, yaml.ScalarNode) and k.value == key:
+                return v
+    return None
 
 
 MAX_DEPTH = 200  # values inside values; real specs stay far below this
