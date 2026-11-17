@@ -1036,3 +1036,58 @@ def test_a_schema_kept_under_an_extension_key_is_named_like_a_component(write):
     assert [(c.kind, c.where) for c in s.compare("GET /box", "a", "b").changes] == [
         ("description-changed", "response 200 application/json: tags"),
         ("description-changed", "response 200 application/json: dims")]
+
+
+PATHS = """
+    paths:
+%s"""
+OP = """      /pets/{%s}/toys/{%s}:
+        get:
+          parameters:
+            - {name: %s, in: path, required: true, schema: {type: string%s}}
+            - {name: %s, in: path, required: true, schema: {type: integer}}
+          responses: {'200': {description: ok}}
+"""
+
+
+def _two(write, a: str, b: str):
+    root = write({"a/openapi.yaml": HEAD + dedent(PATHS % a), "b/openapi.yaml": HEAD + dedent(PATHS % b)})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    return s
+
+
+def test_a_path_parameter_renamed_is_the_same_operation(write):
+    s = _two(write, OP % ("id", "toy", "id", "", "toy"), OP % ("petId", "toy", "petId", ", maxLength: 5", "toy"))
+    d = s.diff("a", "b")
+    # Not removed and added: one operation, under its newer name, whose parameter is still compared.
+    assert (d.operations_added, d.operations_removed, list(d.operations_changed)) == (
+        [], [], ["GET /pets/{petId}/toys/{toy}"])
+    want = [("constraint-tightened", "parameter path petId", "maxLength none", "maxLength 5", "breaking"),
+            ("path-parameter-renamed", "parameter path petId", "id", "petId", "info")]
+    assert sorted((c.kind, c.where, c.before, c.after, c.level)
+                  for c in d.operations_changed["GET /pets/{petId}/toys/{toy}"]) == want
+    # Asked by either name, the same comparison.
+    for name in ("GET /pets/{id}/toys/{toy}", "GET /pets/{petId}/toys/{toy}"):
+        r = s.compare(name, "a", "b")
+        assert (r.name, r.a, r.b) == ("GET /pets/{petId}/toys/{toy}", "a:operation/GET /pets/{id}/toys/{toy}",
+                                      "b:operation/GET /pets/{petId}/toys/{toy}")
+        assert sorted((c.kind, c.where, c.before, c.after, c.level) for c in r.changes) == want
+    renamed = next(c for c in r.changes if c.kind == "path-parameter-renamed")
+    assert (renamed.a, renamed.b) == ("a:parameter/GET /pets/{id}/toys/{toy}#path/id",
+                                      "b:parameter/GET /pets/{petId}/toys/{toy}#path/petId")
+
+
+def test_operations_are_paired_by_path_shape_only_when_one_on_each_side_is_left(write):
+    a = OP % ("id", "toy", "id", "", "toy") + OP % ("name", "toy", "name", "", "toy")
+    s = _two(write, a, OP % ("petId", "toy", "petId", "", "toy"))
+    d = s.diff("a", "b")
+    # Two of that shape before, one after: which one it is cannot be told, so none is paired.
+    assert (d.operations_added, d.operations_removed) == (
+        ["GET /pets/{petId}/toys/{toy}"], ["GET /pets/{id}/toys/{toy}", "GET /pets/{name}/toys/{toy}"])
+    # The same name is matched first: the one left on each side is then paired.
+    s = _two(write, a, OP % ("id", "toy", "id", "", "toy") + OP % ("petName", "toy", "petName", "", "toy"))
+    d = s.diff("a", "b")
+    assert (d.operations_added, d.operations_removed, list(d.operations_changed)) == (
+        [], [], ["GET /pets/{petName}/toys/{toy}"])
