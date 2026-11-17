@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urldefrag, urljoin, urlsplit
 from urllib.request import url2pathname
 import os
+import re
 
 from . import graph as g
 from . import pointer
@@ -110,8 +111,7 @@ class _Builder:
         return doc.line_of(ptr)
 
     def copy(self, value, keys, doc: Document, ptr: str) -> dict:
-        """The values of `keys` in `value`, each of the JSON type SHAPES gives it. A value of another type is
-        reported and left out, or for text read as its text."""
+        """The values of `keys` in `value`, each of the JSON type SHAPES gives it (see `read`)."""
         out = {}
         for k in keys:
             if isinstance(value, dict) and k in value:
@@ -121,23 +121,29 @@ class _Builder:
         return out
 
     def mapping(self, value: dict, k: str, doc: Document, ptr: str) -> dict:
-        """`value[k]` when it is a map, else {} (said, when it is there and something else)."""
-        if value.get(k) is None:
-            return {}
-        out = self.read(value[k], _MAP, doc, pointer.join(ptr, k))
+        """`value[k]` when it is a map, else {} (see `read`)."""
+        out = self.read(value[k], _MAP, doc, pointer.join(ptr, k)) if k in value else _BAD
         return {} if out is _BAD else out
 
     def read(self, value, shape, doc: Document, ptr: str):
-        """`value` if it has `shape`'s JSON type; else _BAD, said once as an `invalid-value` warning."""
+        """`value` if it has `shape`'s JSON type. A key left empty (null) is absent, without a word, but for
+        `type`. A value written as the wrong scalar (`"true"`, `"40"`, `summary: 2020`) is read as what it says,
+        and other values are _BAD; either is said once as an `invalid-value` warning."""
+        key = pointer.split(ptr)[-1] if ptr else ""
+        if value is None and key != "type":
+            return _BAD
         check, wording = shape
         out = check(value)
         if out is not value and (doc.name, ptr, "shape") not in self.warned:
             self.warned.add((doc.name, ptr, "shape"))
-            key = pointer.split(ptr)[-1] if ptr else ""
-            what = "read as its text" if out is not _BAD else "ignored"
-            found = "a list holding other values" if isinstance(value, list) and "list" in wording else _kind_of(value)
-            self.issues.append(Issue(WARNING, "invalid-value", f"`{key}` should be {wording}, found {found}; {what}",
-                                     doc.name, self.line(doc, ptr)))
+            if value is None:
+                message = "`type` is empty, so no type is read; for the null type, write 'null' in quotes"
+            else:
+                what = "ignored" if out is _BAD else f"read as {_kind_of(out)}"
+                found = "a list holding other values" if isinstance(value, list) and shape in (_NAMES, _TYPE) \
+                    else _kind_of(value)
+                message = f"`{key}` should be {wording}, found {found}; {what}"
+            self.issues.append(Issue(WARNING, "invalid-value", message, doc.name, self.line(doc, ptr)))
         return out
 
     def resolve_ref(self, doc: Document, ptr: str, keyword: str = "$ref"):
@@ -456,6 +462,10 @@ class _Builder:
         key = (g.FIELD, self.location(doc, ptr))
         if isinstance(value, dict):
             self.check_keywords(value, doc, ptr)
+            if "required" in value:
+                # `required: true` on a property, a common mistake: said here too, for a property whose type is
+                # not a schema node of its own (where walk_schema reads it).
+                self.read(value["required"], _NAMES, doc, pointer.join(ptr, "required"))
         if key not in self.pending:
             data = self.copy(value, SCHEMA_DATA, doc, ptr) if isinstance(value, dict) else {"schema": value}
             data["name"] = name
@@ -1206,10 +1216,35 @@ def _only(test):
 # The JSON type of each value speclens reads into the graph, as (check, what it should be): the check gives the
 # value to keep, or _BAD. A value of another type is reported and left out, so the rest of the spec is still read
 # and nothing after this sees a value of the wrong type.
+def _flag(v):
+    """True or false; the text `true` or `false` is read as that."""
+    if isinstance(v, bool):
+        return v
+    return {"true": True, "false": False}.get(v.strip().lower(), _BAD) if isinstance(v, str) else _BAD
+
+
+_NUMERAL = re.compile(r"[-+]?(?:\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?")
+
+
+def _number(v):
+    """A number; text that is a number (`"40"`) is read as that number."""
+    if _is_number(v):
+        return v
+    if isinstance(v, str) and _NUMERAL.fullmatch(v.strip()):
+        m = _NUMERAL.fullmatch(v.strip())
+        return float(v) if m.group(1) or m.group(2) else int(v)
+    return _BAD
+
+
+def _bound(v):
+    out = _number(v)
+    return out if out is not _BAD else _flag(v)
+
+
 _TEXT = (_text, "text")
-_FLAG = (_only(lambda v: isinstance(v, bool)), "true or false")
-_NUMBER = (_only(_is_number), "a number")
-_BOUND = (_only(lambda v: _is_number(v) or isinstance(v, bool)), "a number (or, in 3.0, true or false)")
+_FLAG = (_flag, "true or false")
+_NUMBER = (_number, "a number")
+_BOUND = (_bound, "a number (or, in 3.0, true or false)")
 _NAMES = (_only(_is_names), "a list of names")
 _TYPE = (_only(lambda v: isinstance(v, str) or _is_names(v)), "a type name or a list of them")
 _LIST = (_only(lambda v: isinstance(v, list)), "a list")
@@ -1233,7 +1268,9 @@ def _kind_of(v) -> str:
     """What a value is, as a warning says it: `true`, `5`, text, a list, a map."""
     if v is None or isinstance(v, bool) or _is_number(v):
         return f"`{'null' if v is None else str(v).lower() if isinstance(v, bool) else v}`"
-    return "text" if isinstance(v, str) else "a list" if isinstance(v, list) else "a map"
+    if isinstance(v, str):
+        return f'the text "{v}"' if 0 < len(v) <= 20 else "text"
+    return "a list" if isinstance(v, list) else "a map"
 
 
 def _widen(types: set) -> set:

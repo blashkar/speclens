@@ -239,8 +239,10 @@ specs it found 11, each a range in prose narrower than the schema's; a limit sai
 review recurs weekly, ... cannot exceed 7") is not one.
 
 A value of the wrong JSON type, such as `required: true` on a schema or `type: {}`, is a warning
-(`invalid-value`) at its line, and the value is left out; the rest of the spec is read as usual. Text written as
-a number (`summary: 2020`) is read as its text.
+(`invalid-value`) at its line, and the value is left out; the rest of the spec is read as usual. A value written
+as the wrong kind of scalar is read as what it says, with the same warning: `required: "true"` as true,
+`maxLength: "40"` as 40, `summary: 2020` as text. A key left empty is absent, without a warning, except `type`:
+an empty `type` is not the null type, which is written `'null'`.
 
 `diff --breaking` is there for quick checks; to gate releases, use oasdiff, which has far more checks
 (sunset dates, extensions and more) and configuration. What `compare` adds is answers about one thing,

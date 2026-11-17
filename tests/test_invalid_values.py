@@ -120,20 +120,92 @@ def test_a_value_of_the_wrong_type_is_a_warning_and_the_rest_is_read(spec):
                 m: {type: string, maxLength: 3}
         """})
     assert [(i.code, i.line, i.message) for i in s.issues] == [
-        ("invalid-value", 7, "`summary` should be text, found `2020`; read as its text"),
+        ("invalid-value", 7, "`summary` should be text, found `2020`; read as the text \"2020\""),
         ("invalid-value", 6, "`tags` should be a list of names, found `true`; ignored"),
         ("invalid-value", 9, "`name` should be text, found a list; ignored"),
         ("invalid-value", 9, "`type` should be a type name or a list of them, found a map; ignored"),
         ("invalid-value", 15, "`required` should be a list of names, found `true`; ignored"),
         ("invalid-value", 17, ("`type` should be a type name or a list of them, found a list holding other values; "
                                "ignored")),
-        ("invalid-value", 17, "`maxLength` should be a number, found text; ignored")]
+        ("invalid-value", 17, "`maxLength` should be a number, found the text \"ten\"; ignored")]
     assert all(i.severity == "warning" for i in s.issues)
     pet = s.get_schema("Pet")
     assert [(f.name, f.type, f.required) for f in pet.fields] == [("n", "any", False), ("m", "string", False)]
     assert pet.fields[1].limits == {"maxLength": 3}
     op = s.get_operation("GET /p")
     assert op.summary == "2020" and op.parameters[0].id == "v1:parameter/GET /p#parameters/0"
+
+
+def test_a_flag_or_number_written_as_text_is_read_as_what_it_says(spec):
+    s = spec({"openapi.yaml": """
+        openapi: 3.0.3
+        info: {title: t, version: '1'}
+        paths:
+          /pets:
+            get:
+              deprecated: "true"
+              parameters:
+                - {name: limit, in: query, required: "true", schema: {type: integer, maximum: "50"}}
+                - {name: page, in: query, required: "false", schema: {type: integer, minimum: "1.5"}}
+                - {name: sort, in: query, required: "yes", schema: {type: string, maxLength: "ten"}}
+              responses: {'200': {description: ok}}
+        """})
+    # Quoted, a flag or a number still says what it says: the parameter stays required.
+    op = s.get_operation("GET /pets")
+    assert "deprecated" in op.flags
+    assert [(p.name, p.required, p.limits) for p in op.parameters] == [
+        ("limit", True, {"maximum": 50}), ("page", False, {"minimum": 1.5}), ("sort", False, {})]
+    assert [(i.line, i.message) for i in s.issues] == [
+        (6, '`deprecated` should be true or false, found the text "true"; read as `true`'),
+        (8, '`required` should be true or false, found the text "true"; read as `true`'),
+        (8, '`maximum` should be a number, found the text "50"; read as `50`'),
+        (9, '`required` should be true or false, found the text "false"; read as `false`'),
+        (9, '`minimum` should be a number, found the text "1.5"; read as `1.5`'),
+        (10, '`required` should be true or false, found the text "yes"; ignored'),
+        (10, '`maxLength` should be a number, found the text "ten"; ignored')]
+
+
+def test_required_true_on_a_property_is_said_once_wherever_it_is(spec):
+    s = spec({"openapi.yaml": """
+        openapi: 3.0.3
+        info: {title: t, version: '1'}
+        paths: {}
+        components:
+          schemas:
+            Pet:
+              type: object
+              dependentRequired: [a]
+              properties:
+                name: {type: string, required: true}
+                owner: {type: object, required: true, properties: {id: {type: string}}}
+        """})
+    assert [(i.line, i.message) for i in s.issues] == [
+        (8, "`dependentRequired` should be a map of lists of names, found a list; ignored"),
+        (10, "`required` should be a list of names, found `true`; ignored"),
+        (11, "`required` should be a list of names, found `true`; ignored")]
+
+
+def test_a_key_left_empty_is_absent_but_an_empty_type_is_said(spec):
+    s = spec({"openapi.yaml": """
+        openapi: 3.0.3
+        info: {title: t, version: '1'}
+        paths:
+          /pets:
+            get:
+              summary:
+              tags:
+              responses:
+        components:
+          schemas:
+            Pet:
+              description:
+              required:
+              properties:
+                name: {type: , maxLength: }
+        """})
+    assert [(i.line, i.message) for i in s.issues] == [
+        (15, "`type` is empty, so no type is read; for the null type, write 'null' in quotes")]
+    assert s.get_schema("Pet").fields[0].type == "any"
 
 
 def test_no_single_value_of_the_wrong_type_stops_anything(tmp_path):
