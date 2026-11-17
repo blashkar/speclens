@@ -109,6 +109,37 @@ class _Builder:
     def line(self, doc: Document, ptr: str) -> int | None:
         return doc.line_of(ptr)
 
+    def copy(self, value, keys, doc: Document, ptr: str) -> dict:
+        """The values of `keys` in `value`, each of the JSON type SHAPES gives it. A value of another type is
+        reported and left out, or for text read as its text."""
+        out = {}
+        for k in keys:
+            if isinstance(value, dict) and k in value:
+                v = self.read(value[k], SHAPES[k], doc, pointer.join(ptr, k))
+                if v is not _BAD:
+                    out[k] = v
+        return out
+
+    def mapping(self, value: dict, k: str, doc: Document, ptr: str) -> dict:
+        """`value[k]` when it is a map, else {} (said, when it is there and something else)."""
+        if value.get(k) is None:
+            return {}
+        out = self.read(value[k], _MAP, doc, pointer.join(ptr, k))
+        return {} if out is _BAD else out
+
+    def read(self, value, shape, doc: Document, ptr: str):
+        """`value` if it has `shape`'s JSON type; else _BAD, said once as an `invalid-value` warning."""
+        check, wording = shape
+        out = check(value)
+        if out is not value and (doc.name, ptr, "shape") not in self.warned:
+            self.warned.add((doc.name, ptr, "shape"))
+            key = pointer.split(ptr)[-1] if ptr else ""
+            what = "read as its text" if out is not _BAD else "ignored"
+            found = "a list holding other values" if isinstance(value, list) and "list" in wording else _kind_of(value)
+            self.issues.append(Issue(WARNING, "invalid-value", f"`{key}` should be {wording}, found {found}; {what}",
+                                     doc.name, self.line(doc, ptr)))
+        return out
+
     def resolve_ref(self, doc: Document, ptr: str, keyword: str = "$ref"):
         """The (document, pointer) the `$ref` (or `$dynamicRef`) at `ptr` points to, or None after reporting why
         not."""
@@ -287,7 +318,7 @@ class _Builder:
                 return self.schema(value, doc, ptr)
         key = (g.SCHEMA, self.location(doc, ptr))
         if key not in self.pending:
-            data = _copy(value, SCHEMA_DATA)
+            data = self.copy(value, SCHEMA_DATA, doc, ptr)
             for keyword in ("additionalProperties", "unevaluatedProperties"):
                 if value.get(keyword) is False:  # a constraint, though not a schema of its own
                     data[keyword] = False
@@ -307,11 +338,12 @@ class _Builder:
         if isinstance(value.get("$dynamicRef"), str) and self.version != "3.0":
             self.dynamic_ref(owner, value, doc, ptr)
         self.check_keywords(value, doc, ptr)
-        if "$schema" in value and value["$schema"] not in KNOWN_DIALECTS:
+        if "$schema" in value and (not isinstance(value["$schema"], str) or value["$schema"] not in KNOWN_DIALECTS):
             self.issues.append(Issue(ERROR, "unknown-dialect", f"unknown schema dialect {value['$schema']!r}",
                                      doc.name, self.line(doc, pointer.join(ptr, "$schema"))))
 
-        self.required[owner].update(r for r in value.get("required", ()) if isinstance(r, str))
+        names = self.read(value["required"], _NAMES, doc, pointer.join(ptr, "required")) if "required" in value else []
+        self.required[owner].update(names if names is not _BAD else ())
         for name, sub in _items(value.get("properties")):
             self.field(owner, name, sub, doc, pointer.join(ptr, "properties", name))
 
@@ -425,7 +457,7 @@ class _Builder:
         if isinstance(value, dict):
             self.check_keywords(value, doc, ptr)
         if key not in self.pending:
-            data = _copy(value, SCHEMA_DATA) if isinstance(value, dict) else {"schema": value}
+            data = self.copy(value, SCHEMA_DATA, doc, ptr) if isinstance(value, dict) else {"schema": value}
             data["name"] = name
             self.add(g.FIELD, key[1], doc, ptr, data)
             if isinstance(value, dict) and (self.refers(value) or STRUCTURAL & set(value)):
@@ -457,9 +489,9 @@ class _Builder:
             name = f"{method.upper()} {path}"
             if op_doc is not item_doc or not op_ptr.startswith(item_ptr):
                 self.op_locations.setdefault((op_doc.name, op_ptr), set()).add(name)
-            data = {"method": method.upper(), "path": path, **_copy(op, ("operationId", "summary", "description",
-                                                                         "tags", "deprecated")),
-                    "responses": [str(k) for k in (op.get("responses") or {})]}
+            data = {"method": method.upper(), "path": path,
+                    **self.copy(op, ("operationId", "summary", "description", "tags", "deprecated"), op_doc, op_ptr),
+                    "responses": [str(k) for k in self.mapping(op, "responses", op_doc, op_ptr)]}
             # The operation's own `security`, else the root document's; absent when neither declares one.
             security = _security(op["security"] if "security" in op else (doc.data or {}).get("security"))
             if security is not None:
@@ -503,8 +535,9 @@ class _Builder:
                         continue
                     self.pending[op]["data"].setdefault("callbacks", []).append(
                         {"name": name, "expression": expression, "method": method.upper(),
-                         **_copy(request, ("summary", "description")),
-                         "responses": [str(k) for k in (request.get("responses") or {})]})
+                         **self.copy(request, ("summary", "description"), i_doc, pointer.join(i_ptr, method)),
+                         "responses": [str(k) for k in self.mapping(request, "responses", i_doc,
+                                                                    pointer.join(i_ptr, method))]})
                     body_ptr = pointer.join(i_ptr, method, "requestBody")
                     found = self.deref(request.get("requestBody"), i_doc, body_ptr)
                     if found is None or not isinstance(found[0], dict):
@@ -534,14 +567,15 @@ class _Builder:
         key = (g.PARAMETER, self.location(doc, ptr))
         if key in self.pending:
             return key
-        data = _copy(value, ("name", "in", "description", "required", "deprecated", "style", "explode"))
+        data = self.copy(value, ("name", "in", "description", "required", "deprecated", "style", "explode"), doc, ptr)
         schema = value.get("schema")
         if isinstance(schema, dict):
             self.check_keywords(schema, doc, pointer.join(ptr, "schema"))
         if isinstance(schema, dict) and not (self.refers(schema) or STRUCTURAL & set(schema)):
             # A simple inline schema's keywords are the parameter's, but what the parameter says about itself
             # (its description, deprecated) is kept over what its schema says.
-            data.update({k: v for k, v in _copy(schema, SCHEMA_DATA).items() if k not in data})
+            data.update({k: v for k, v in self.copy(schema, SCHEMA_DATA, doc, pointer.join(ptr, "schema")).items()
+                         if k not in data})
         self.add(g.PARAMETER, key[1], doc, ptr, data)
         if isinstance(schema, dict) and (self.refers(schema) or STRUCTURAL & set(schema)):
             s_ptr = pointer.join(ptr, "schema")
@@ -578,7 +612,8 @@ class _Builder:
             if op is not None and found is not None and isinstance(found[0], dict):
                 self.pending[op]["data"].setdefault("links", []).append(
                     {"status": status, "name": name,
-                     **_copy(found[0], ("operationId", "operationRef", "parameters", "requestBody", "description"))})
+                     **self.copy(found[0], ("operationId", "operationRef", "parameters", "requestBody", "description"),
+                                 found[1], found[2])})
         for media_type, media, m_ptr in self.media(response.get("content"), doc, pointer.join(ptr, "content")):
             s_ptr = pointer.join(m_ptr, "schema")
             target = self.schema(media["schema"], doc, s_ptr)
@@ -709,7 +744,7 @@ class _Builder:
         elif minor == "3.1":
             self.version = "3.1"
             dialect = root.data.get("jsonSchemaDialect")
-            if dialect is not None and dialect not in KNOWN_DIALECTS:
+            if dialect is not None and (not isinstance(dialect, str) or dialect not in KNOWN_DIALECTS):
                 self.issues.append(Issue(ERROR, "unknown-dialect", f"unknown schema dialect {dialect!r}",
                                          root.name, self.line(root, "/jsonSchemaDialect")))
         else:
@@ -1046,7 +1081,11 @@ class _Builder:
             elif tok == "parameters" and nxt is not None:
                 try:
                     param = pointer.lookup(doc.data, pointer.join(ptr, tok, nxt))
-                    out.append(f"#{param.get('in')}/{param.get('name')}")
+                    where, name = (param.get(k) for k in ("in", "name"))
+                    where, name = (v if v is None else _text(v) for v in (where, name))
+                    if _BAD in (where, name):  # not text: known by its place in the list
+                        raise KeyError(nxt)
+                    out.append(f"#{where}/{name}")
                 except (KeyError, AttributeError):
                     out.append(f"#parameters/{nxt}")
                 step = 2
@@ -1135,13 +1174,66 @@ def _scheme(value: dict) -> dict:
     flows = value.get("flows")
     if isinstance(flows, dict):
         out["flows"] = sorted(str(k) for k in flows)
-        out["scopes"] = sorted({str(s) for f in flows.values() if isinstance(f, dict)
-                                for s in (f.get("scopes") or {}) if isinstance(f.get("scopes"), dict)})
+        out["scopes"] = sorted({str(s) for f in flows.values() if isinstance(f, dict) and isinstance(f.get("scopes"), dict)
+                                for s in f["scopes"]})
     return out
 
 
-def _copy(value, keys) -> dict:
-    return {k: value[k] for k in keys if isinstance(value, dict) and k in value}
+_BAD = object()  # a value of the wrong JSON type
+
+
+def _is_number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _is_names(v) -> bool:
+    return isinstance(v, list) and all(isinstance(x, str) for x in v)
+
+
+def _text(v):
+    """A string; a number or boolean written where text belongs is read as its text."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return str(v) if _is_number(v) else _BAD
+
+
+def _only(test):
+    return lambda v: v if test(v) else _BAD
+
+
+# The JSON type of each value speclens reads into the graph, as (check, what it should be): the check gives the
+# value to keep, or _BAD. A value of another type is reported and left out, so the rest of the spec is still read
+# and nothing after this sees a value of the wrong type.
+_TEXT = (_text, "text")
+_FLAG = (_only(lambda v: isinstance(v, bool)), "true or false")
+_NUMBER = (_only(_is_number), "a number")
+_BOUND = (_only(lambda v: _is_number(v) or isinstance(v, bool)), "a number (or, in 3.0, true or false)")
+_NAMES = (_only(_is_names), "a list of names")
+_TYPE = (_only(lambda v: isinstance(v, str) or _is_names(v)), "a type name or a list of them")
+_LIST = (_only(lambda v: isinstance(v, list)), "a list")
+_MAP = (_only(lambda v: isinstance(v, dict)), "a map")
+_MAP_OF_NAMES = (_only(lambda v: isinstance(v, dict) and all(_is_names(x) for x in v.values())),
+                 "a map of lists of names")
+_ANY = (lambda v: v, "any value")
+SHAPES = {
+    **dict.fromkeys(("title", "description", "format", "pattern", "operationId", "operationRef", "summary", "name",
+                     "in", "style"), _TEXT),
+    **dict.fromkeys(("deprecated", "nullable", "readOnly", "writeOnly", "uniqueItems", "required", "explode"), _FLAG),
+    **dict.fromkeys(("minimum", "maximum", "multipleOf", "minLength", "maxLength", "minItems", "maxItems",
+                     "minProperties", "maxProperties", "minContains", "maxContains"), _NUMBER),
+    **dict.fromkeys(("exclusiveMinimum", "exclusiveMaximum"), _BOUND),
+    "type": _TYPE, "enum": _LIST, "tags": _NAMES, "dependentRequired": _MAP_OF_NAMES, "parameters": _MAP,
+    **dict.fromkeys(("const", "default", "requestBody"), _ANY),
+}
+
+
+def _kind_of(v) -> str:
+    """What a value is, as a warning says it: `true`, `5`, text, a list, a map."""
+    if v is None or isinstance(v, bool) or _is_number(v):
+        return f"`{'null' if v is None else str(v).lower() if isinstance(v, bool) else v}`"
+    return "text" if isinstance(v, str) else "a list" if isinstance(v, list) else "a map"
 
 
 def _widen(types: set) -> set:

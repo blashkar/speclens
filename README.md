@@ -238,6 +238,10 @@ are checked: "Required" in prose is most often a condition ("required for mobile
 specs it found 11, each a range in prose narrower than the schema's; a limit said under a condition ("if the
 review recurs weekly, ... cannot exceed 7") is not one.
 
+A value of the wrong JSON type, such as `required: true` on a schema or `type: {}`, is a warning
+(`invalid-value`) at its line, and the value is left out; the rest of the spec is read as usual. Text written as
+a number (`summary: 2020`) is read as its text.
+
 `diff --breaking` is there for quick checks; to gate releases, use oasdiff, which has far more checks
 (sunset dates, extensions and more) and configuration. What `compare` adds is answers about one thing,
 in citable ids that `verify` can check (see [Why speclens](#why-speclens-and-when-to-use-something-else)).
