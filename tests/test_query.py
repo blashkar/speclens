@@ -966,8 +966,11 @@ def test_a_field_whose_name_holds_dots(write):
     assert [d.id for d in s.find_field("Extra.airline.leg.code").definitions] == ["v1:field/Extra.airline.leg.code"]
     with pytest.raises(NotFound, match="no field named 'Pet.nme'"):  # Pet is a schema: its fields are suggested
         s.find_field("Pet.nme")
-    with pytest.raises(NotFound, match="no field named 'Nope.name'; closest: name"):
+    with pytest.raises(NotFound, match=r"^no field named 'Nope\.name', and no schema named 'Nope'; closest: name$"):
         s.find_field("Nope.name")
+    with pytest.raises(NotFound, match=r"^no field named 'Pett\.name', and no schema named 'Pett'; closest: name; "
+                                       r"closest schemas: Pet$"):
+        s.find_field("Pett.name")  # a typo in the schema part: said, with the schema it may be
 
 
 def test_names_in_any_script_have_keys_of_their_own(write):
