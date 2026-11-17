@@ -182,7 +182,8 @@ def test_added_and_removed(specs):
     assert kinds(specs.compare("GET /stores", "1.2", "1.10")) == {("operation-removed", "", "breaking")}
     r = specs.compare("Pet.nickname", "1.2", "1.10")
     assert (r.what, kinds(r)) == ("field", {("field-removed", "", "info")})  # optional, in responses
-    assert specs.compare("Pet.name", "1.2", "1.10").changes == []
+    # no longer in Pet's `required`: said for the field as for the schema (it was missed here before)
+    assert kinds(specs.compare("Pet.name", "1.2", "1.10")) == {("required-removed", "", "breaking")}
     with pytest.raises(NotFound):
         specs.compare("Nothing", "1.2", "1.10")
 
@@ -1036,3 +1037,25 @@ def test_a_schema_kept_under_an_extension_key_is_named_like_a_component(write):
     assert [(c.kind, c.where) for c in s.compare("GET /box", "a", "b").changes] == [
         ("description-changed", "response 200 application/json: tags"),
         ("description-changed", "response 200 application/json: dims")]
+
+
+def test_compare_one_field_says_whether_it_became_required(write):
+    spec = """
+        paths:
+          /pets:
+            post:
+              requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/Pet'}}}}
+              responses: {'200': {description: ok}}
+        components:
+          schemas:
+            Pet: {type: object, required: [%s], properties: {id: {type: string}, %s}}
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(spec % ("id", "tag: {type: string}")),
+                  "b/openapi.yaml": HEAD + dedent(spec % ("id, tag, chip", "tag: {type: string}, chip: {type: string}"))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    assert kinds(s.compare("Pet.tag", "a", "b")) == {("required-added", "", "breaking")}  # sent in requests
+    assert kinds(s.compare("Pet.chip", "a", "b")) == {("required-field-added", "", "breaking")}
+    assert kinds(s.compare("Pet.tag", "b", "a")) == {("required-removed", "", "info")}
+    assert kinds(s.compare("Pet.chip", "b", "a")) == {("required-field-removed", "", "warning")}

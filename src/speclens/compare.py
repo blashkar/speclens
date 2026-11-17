@@ -986,16 +986,20 @@ def compare(a, b, name: str) -> Comparison:
         fa, fb = _field(a, name), _field(b, name)
         if fa or fb:
             side = _side(b, fb.id) if fb else _side(a, fa.id)
+            # Whether it is required is said by the schema holding it, on that edge, not by the field itself.
+            ea, eb = fa and _field_edge(a, name, fa), fb and _field_edge(b, name, fb)
             if not fa or not fb:
-                kind = "field-added" if fb else "field-removed"
-                node = fb or fa
+                required = (eb or ea) is not None and (eb or ea).data["required"]
+                kind = ("required-field-added" if required else "field-added") if fb else \
+                    ("required-field-removed" if required else "field-removed")
                 changes = [_rated(c.change(kind, "", None if fb else describe(a.graph, fa),
                                            describe(b.graph, fb) if fb else None, None, fa and fa.id, fb and fb.id),
                                   side, "")]
-                del node
             else:
                 changes = c.field(fa, fb, side)
-                ea, eb = _field_edge(a, name, fa), _field_edge(b, name, fb)
+                if ea and eb and ea.data["required"] != eb.data["required"]:
+                    kind = "required-added" if eb.data["required"] else "required-removed"
+                    changes.insert(0, _rated(c.change(kind, "", None, None, None, fa.id, fb.id), side, ""))
                 if ea and eb and _moved(a.graph, ea, b.graph, eb, b.graph.nodes[eb.source]):
                     changes.insert(0, replace(_rated(c.change("field-moved", "", _written_on(a.graph, ea),
                                                               _written_on(b.graph, eb), None, fa.id, fb.id), side, ""),
