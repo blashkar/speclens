@@ -8,7 +8,7 @@ import re
 from . import graph as g
 from .issues import WARNING, Issue
 from .query import Ambiguous, NotFound
-from .verify import verify
+from .verify import _prepared, _verify
 
 CODE = "description-contradicts-schema"
 _NUMBER = re.compile(r"\d")
@@ -28,19 +28,24 @@ def description_issues(spec) -> list[Issue]:
             r = spec.get_schema(node.id)
         except (NotFound, Ambiguous):  # a schema the queries cannot show is reported elsewhere
             continue
+        ev = None  # made once for the schema, when a description needs it
         if _NUMBER.search(r.description or ""):  # "The name must not exceed 100 characters": its fields, named in plain words
-            out += _checked(_with_names(r.description, [f.name for f in r.fields]), r, r.name, r.where)
+            ev = ev or _prepared([r])
+            out += _checked(_with_names(r.description, [f.name for f in r.fields]), ev, r.name, r.where)
         for f in r.fields:
             if _NUMBER.search(f.description or "") and not f.inherited_from:  # once, where it is written
-                out += _checked(f"`{f.name}`: {f.description}", r, f"{r.name}.{f.name}", f.where)
+                ev = ev or _prepared([r])
+                out += _checked(f"`{f.name}`: {f.description}", ev, f"{r.name}.{f.name}", f.where)
     for node in spec.graph.of_kind(g.OPERATION):
         try:
             r = spec.get_operation(node.id)
         except (NotFound, Ambiguous):
             continue
+        ev = None
         for p in r.parameters:
             if _NUMBER.search(p.description or ""):
-                out += _checked(f"`{p.name}`: {p.description}", r, f"{r.method} {r.path} {p.location} {p.name}",
+                ev = ev or _prepared([r])
+                out += _checked(f"`{p.name}`: {p.description}", ev, f"{r.method} {r.path} {p.location} {p.name}",
                                 p.where)
     return list(dict.fromkeys(out))
 
@@ -48,16 +53,16 @@ def description_issues(spec) -> list[Issue]:
 def _with_names(text: str, names: list[str]) -> str:
     """The text with these names in backticks where they stand as words outside code: "the name" -> "the `name`"."""
     parts = re.split(r"(`[^`]*`)", text)
-    for name in sorted(set(names), key=len, reverse=True):
+    for name in sorted({n for n in names if n in text}, key=len, reverse=True):  # only those the text holds
         pattern = re.compile(rf"(?<![\w`.]){re.escape(name)}(?![\w`])")
         parts = [p if p.startswith("`") else pattern.sub(f"`{name}`", p) for p in parts]
     return "".join(parts)
 
 
-def _checked(text: str, result, what: str, where: str) -> list[Issue]:
+def _checked(text: str, ev, what: str, where: str) -> list[Issue]:
     file, line = _place(where)
     out = []
-    for f in verify(text, [result]).findings:
+    for f in _verify(text, ev).findings:
         if f.kind == "contradicted-claim" and _LIMIT.search(f.detail):
             detail = re.sub(r" in \S+$", "", f.detail).replace("the evidence shows", "the schema says")
             said = re.sub(r"^`[^`]+`: ", "", f.text.strip())  # the description's words, not the name put before
