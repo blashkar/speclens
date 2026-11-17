@@ -1160,3 +1160,95 @@ def test_a_single_value_is_sent_the_same_whatever_explode_says(write):
          "style form, explode false", "breaking"),
         ("parameter-style-undefined", "parameter query sort", "style form, explode true",
          "style deepObject, explode false", "warning")]
+
+
+def test_not_if_then_else_and_dependent_schemas_are_compared(write):
+    obj = "{type: object, properties: {kind: {type: string}, n: {type: integer}}%s}"
+    cond = ", if: {properties: {kind: {const: a}}}, then: {required: [n]}"
+    cases = {
+        ("", cond): [("constraint-tightened", "no then", "then: a schema")],
+        (cond, ""): [("constraint-loosened", "then: a schema", "no then")],
+        (cond, cond + ", else: {required: [kind]}"): [("constraint-tightened", "no else", "else: a schema")],
+        (", then: {required: [n]}", cond): [("condition-changed", "no if", "if: a schema")],
+        (cond, cond.replace("const: a", "const: b")): [("condition-changed", "if: a schema", "if: another")],
+        (cond, ", if: {properties: {kind: {const: a}}, description: test}, then: {required: [n]}"): [],
+        (cond.replace("{required: [n]}", "{properties: {n: {maximum: 5}}}"),
+         cond.replace("{required: [n]}", "{properties: {n: {maximum: 4}}}")): [
+            ("constraint-tightened", "maximum 5", "maximum 4")],
+        ("", ", not: {required: [n]}"): [("constraint-tightened", "no not", "not: a schema")],
+        (", not: {required: [n]}", ""): [("constraint-loosened", "not: a schema", "no not")],
+        (", not: {required: [n]}", ", not: {required: [kind]}"): [
+            ("condition-changed", "not: a schema", "not: another")],
+        ("", ", dependentSchemas: {kind: {required: [n]}}"): [
+            ("constraint-tightened", "no dependentSchemas/kind", "dependentSchemas/kind: a schema")],
+        (", dependentSchemas: {kind: {properties: {n: {minimum: 0}}}}",
+         ", dependentSchemas: {kind: {properties: {n: {minimum: 1}}}}"): [
+            ("constraint-tightened", "minimum 0", "minimum 1")],
+        (", dependentSchemas: {kind: {required: [n]}}", ", dependentSchemas: {n: {required: [n]}}"): [
+            ("constraint-loosened", "dependentSchemas/kind: a schema", "no dependentSchemas/kind"),
+            ("constraint-tightened", "no dependentSchemas/n", "dependentSchemas/n: a schema")],
+        # written as booleans: `then: true` and `not: false` do nothing; `then: false` and `not: true` allow nothing
+        (", then: true", ""): [],
+        ("", ", not: false"): [],
+        ("", ", not: true"): [("constraint-tightened", "no not", "not: true")],
+        (", not: {required: [n]}", ", not: true"): [("constraint-tightened", "not: a schema", "not: true")],
+        (cond, cond.replace("{required: [n]}", "false")): [("constraint-tightened", "then: a schema", "then: false")],
+        (", dependentSchemas: {kind: false}", ", dependentSchemas: {kind: true}"): [
+            ("constraint-loosened", "dependentSchemas/kind: false", "dependentSchemas/kind: true")],
+        (cond, cond.replace("if: {properties: {kind: {const: a}}}", "if: true")): [
+            ("condition-changed", "if: a schema", "if: true")],
+    }
+    for (a, b), want in cases.items():
+        assert _schema_pair(write, obj % a, obj % b) == want, (a, b)
+
+
+def test_items_false_is_a_constraint(write):
+    arr = "{type: array, prefixItems: [{type: string}]%s}"
+    assert _schema_pair(write, arr % "", arr % ", items: false") == [
+        ("constraint-tightened", "items: anything", "items: false")]
+    assert _schema_pair(write, arr % ", items: false", arr % ", items: {type: string}") == [
+        ("constraint-loosened", "items: false", "items: a schema")]
+
+
+_SILENT = [  # (keyword written on a schema, and another value for it): each must give a line when added,
+    # removed or changed
+    ("not: {type: string}", "not: {type: integer}"),
+    ("if: {required: [a]}, then: {required: [b]}", "if: {required: [b]}, then: {required: [b]}"),
+    ("if: {required: [a]}, then: {required: [b]}", "if: {required: [a]}, then: {required: [a]}"),
+    ("if: {required: [a]}, else: {required: [b]}", "if: {required: [a]}, else: {required: [a]}"),
+    ("dependentSchemas: {a: {required: [b]}}", "dependentSchemas: {a: {required: [a]}}"),
+    ("not: true", "not: {type: string}"),
+    ("if: true, then: false", "if: false, then: false"),
+    ("dependentSchemas: {a: false}", "dependentSchemas: {a: {required: [a]}}"),
+    ("items: {type: string}", "items: {type: integer}"),
+    ("items: false", "items: {type: integer}"),
+    ("prefixItems: [{type: string}]", "prefixItems: [{type: integer}]"),
+    ("contains: {type: string}", "contains: {type: integer}"),
+    ("unevaluatedItems: {type: string}", "unevaluatedItems: false"),
+    ("additionalProperties: {type: string}", "additionalProperties: false"),
+    ("unevaluatedProperties: {type: string}", "unevaluatedProperties: false"),
+    ("additionalProperties: false", "additionalProperties: {type: string}"),
+    ("propertyNames: {maxLength: 3}", "propertyNames: {maxLength: 4}"),
+    ("patternProperties: {'^x': {type: string}}", "patternProperties: {'^x': {type: integer}}"),
+    ("multipleOf: 2", "multipleOf: 3"),
+    ("uniqueItems: true", "uniqueItems: false"),
+    ("const: 1", "const: 2"),
+    ("enum: [1]", "enum: [2]"),
+    ("pattern: '^a'", "pattern: '^b'"),
+    ("format: date", "format: uuid"),
+    ("maxLength: 3", "maxLength: 4"),
+    ("minItems: 1", "minItems: 2"),
+    ("maxProperties: 1", "maxProperties: 2"),
+    ("required: [a]", "required: [b]"),
+]
+# Not yet read: a field written inline with only `required: [names]` keeps the field's own required flag instead.
+_NOT_READ = {("{type: object, properties: {f: {%s}}}", "required: [a]")}
+
+
+def test_no_keyword_read_into_the_graph_changes_silently(write):
+    for x, y in _SILENT:
+        for where in ("{%s}", "{type: object, properties: {f: {%s}}}", "{type: array, items: {%s}}"):
+            if (where, x) in _NOT_READ:
+                continue
+            for a, b in ((x, ""), ("", x), (x, y)):
+                assert _schema_pair(write, where % a, where % b), (where, a, b)
