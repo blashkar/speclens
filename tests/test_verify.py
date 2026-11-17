@@ -1119,3 +1119,38 @@ def test_formats_and_what_a_field_lacks_are_not_claims_that_it_is_absent(write):
     assert kinds(verify("`age` is an integer in 2.0. In 1.0 it is missing.", ev)) == [
         ("contradicted-claim", "In 1.0 it is missing.")]
     assert kinds(verify("`born` uses the `dateOfBirth` field.", ev)) == [("unknown-name", "dateOfBirth")]
+
+
+def test_a_field_whose_own_name_holds_dots_is_one_name(write):
+    root = write({"openapi.yaml": HEAD + dedent("""
+        paths: {}
+        components:
+          schemas:
+            Extra:
+              type: object
+              required: [airline]
+              properties:
+                airline.leg.code: {type: string, maxLength: 5}
+                airline: {type: string, maxLength: 4}
+        """)})
+    s = SpecSet()
+    s.load(root / "openapi.yaml", "a")
+    ev = [s.get_schema("Extra", "a")]
+
+    def found(answer):
+        return [(f.kind, f.detail) for f in verify(answer, ev).findings]
+
+    assert found("In a, `Extra.airline.leg.code` has a maxLength of 10.") == [
+        ("contradicted-claim", "the evidence shows Extra.airline.leg.code: maxLength 5 in a")]
+    assert found("In a, `Extra.airline.leg.code` is required.") == [
+        ("contradicted-claim", "the evidence shows Extra.airline.leg.code optional in a")]
+    assert found("In a, Extra has no `airline.leg.code`.") == [
+        ("contradicted-claim", "the evidence shows airline.leg.code in Extra in a")]
+    # unchanged: a path through nested fields still means its last part, and a plain name is itself
+    assert found("In a, `trip.legs.airline` has a maxLength of 10.") == [
+        ("unknown-name", "this name is nowhere in the evidence"),
+        ("contradicted-claim", "the evidence shows airline: maxLength 4 in a")]
+    assert found("In a, `airline` has a maxLength of 10.") == [
+        ("contradicted-claim", "the evidence shows airline: maxLength 4 in a")]
+    assert found("In a, `Extra.airline` is optional.") == [
+        ("contradicted-claim", "the evidence shows Extra.airline required in a")]
