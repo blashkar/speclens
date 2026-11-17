@@ -103,7 +103,7 @@ def build_server(specs: SpecSet, allow: list[Path] | None = None):
         operations that use it. `name` as written (Pet), in another case, in plain words (pet owners), or an id.
         `full=False` cuts long descriptions. `expand=1` adds the schemas its fields hold; `max_chars` leaves out the
         deepest of them, by name, beyond that size."""
-        return answer(lambda: specs.get_schema(name, label, expand, max_chars), full)
+        return answer(lambda: specs.get_schema(name, label, expand, max_chars, full=full), full)
 
     @tool
     def get_operation(operation: str, label: str | None = None, full: bool = True, expand: int = 0,
@@ -112,7 +112,7 @@ def build_server(specs: SpecSet, allow: list[Path] | None = None):
         or an operationId. `expand=1` adds the schemas of its request and response bodies (`errors=True`: error
         responses' too); `max_chars` leaves out the deepest of them, by name, beyond that size."""
         return answer(lambda: specs.get_operation(operation, label=label, expand=expand, errors=errors,
-                                                  max_chars=max_chars), full)
+                                                  max_chars=max_chars, full=full), full)
 
     @tool
     def find_field(name: str, label: str | None = None, full: bool = True) -> str:

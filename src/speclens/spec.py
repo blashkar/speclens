@@ -35,12 +35,13 @@ class Spec:
             self._index = Indexes(self.graph)
         return self._index
 
-    def get_schema(self, name: str, expand: int = 0, max_chars: int | None = None) -> query.SchemaResult:
-        return query.get_schema(self, name, expand, max_chars)
+    def get_schema(self, name: str, expand: int = 0, max_chars: int | None = None, *,
+                   full: bool = False) -> query.SchemaResult:
+        return query.get_schema(self, name, expand, max_chars, full=full)
 
     def get_operation(self, method: str, path: str | None = None, expand: int = 0, errors: bool = False,
-                      max_chars: int | None = None) -> query.OperationResult:
-        return query.get_operation(self, method, path, expand, errors, max_chars)
+                      max_chars: int | None = None, *, full: bool = False) -> query.OperationResult:
+        return query.get_operation(self, method, path, expand, errors, max_chars, full=full)
 
     def find_field(self, name: str) -> query.FieldResult:
         return query.find_field(self, name)
@@ -191,12 +192,13 @@ class SpecSet:
         return self.specs[label]
 
     def get_schema(self, name: str, label: str | None = None, expand: int = 0,
-                   max_chars: int | None = None) -> query.SchemaResult:
-        return self.get(label).get_schema(name, expand, max_chars)
+                   max_chars: int | None = None, *, full: bool = False) -> query.SchemaResult:
+        return self.get(label).get_schema(name, expand, max_chars, full=full)
 
     def get_operation(self, method: str, path: str | None = None, label: str | None = None, expand: int = 0,
-                      errors: bool = False, max_chars: int | None = None) -> query.OperationResult:
-        return self.get(label).get_operation(method, path, expand, errors, max_chars)
+                      errors: bool = False, max_chars: int | None = None, *,
+                      full: bool = False) -> query.OperationResult:
+        return self.get(label).get_operation(method, path, expand, errors, max_chars, full=full)
 
     def find_field(self, name: str, label: str | None = None) -> query.FieldResult:
         return self.get(label).find_field(name)
