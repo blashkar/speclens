@@ -660,9 +660,10 @@ def _member(subject: str) -> tuple[str, str]:
     dotted = _DOTTED.get()
     if subject in dotted:
         return "", subject
-    for name in dotted:
-        if subject.endswith("." + name):
-            return subject[:-len(name) - 1], name
+    # the longest such name: `airline.leg.code`, not `leg.code` with `Extra.airline` taken for the schema
+    name = max((n for n in dotted if subject.endswith("." + n)), key=len, default=None)
+    if name:
+        return subject[:-len(name) - 1], name
     owner, _, member = subject.rpartition(".")
     return owner, member
 

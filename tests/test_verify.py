@@ -1131,6 +1131,7 @@ def test_a_field_whose_own_name_holds_dots_is_one_name(write):
               required: [airline]
               properties:
                 airline.leg.code: {type: string, maxLength: 5}
+                leg.code: {type: string, maxLength: 3}
                 airline: {type: string, maxLength: 4}
         """)})
     s = SpecSet()
@@ -1141,6 +1142,9 @@ def test_a_field_whose_own_name_holds_dots_is_one_name(write):
         return [(f.kind, f.detail) for f in verify(answer, ev).findings]
 
     assert found("In a, `Extra.airline.leg.code` has a maxLength of 10.") == [
+        ("contradicted-claim", "the evidence shows Extra.airline.leg.code: maxLength 5 in a")]
+    # the longest field name it ends with, not `leg.code` (maxLength 3) in a schema `Extra.airline`
+    assert found("In a, `Extra.airline.leg.code` has a maxLength of 3.") == [
         ("contradicted-claim", "the evidence shows Extra.airline.leg.code: maxLength 5 in a")]
     assert found("In a, `Extra.airline.leg.code` is required.") == [
         ("contradicted-claim", "the evidence shows Extra.airline.leg.code optional in a")]
