@@ -59,6 +59,7 @@ components:
             tags: {type: array, minItems: 1, uniqueItems: true, items: {type: string}}
             owner: {oneOf: [{$ref: '#/components/schemas/Error'}, {type: 'null'}]}
             extra: {type: object, additionalProperties: {type: string}, patternProperties: {'^x-': {type: integer}}}
+            nick: {type: [string, 'null'], default: null, const: null}
 """)
 JUNK = [True, None, 5, 1.5, "text", "", [], {}, ["a"], [1], {"a": 1}, {"$ref": "#/nowhere"}, {"$ref": 5},
         [{"$ref": "#/components/schemas/Pet"}], [[]]]
@@ -214,6 +215,8 @@ def test_no_single_value_of_the_wrong_type_stops_anything(tmp_path):
     (tmp_path / "base.json").write_text(json.dumps(SPEC))
     base = load_spec(tmp_path / "base.json", "base")
     assert codes(base) == []
+    nick = base.graph.nodes["base:field/Pet.nick"].data  # null is a value where any value is
+    assert {"default", "const"} <= set(nick) and nick["default"] is None and nick["const"] is None
     places = [p for p in _paths(SPEC) if p]
     for n, place in enumerate(places):
         for junk in (JUNK[n % len(JUNK)], JUNK[(n + 5) % len(JUNK)], JUNK[(n + 10) % len(JUNK)]):
@@ -227,3 +230,24 @@ def test_no_single_value_of_the_wrong_type_stops_anything(tmp_path):
                 _use(load_spec(tmp_path / "x.json", "x"), base)
             except Exception as e:  # which value, and what it raised
                 raise AssertionError(f"{'/'.join(map(str, place))} = {junk!r}: {type(e).__name__}: {e}") from e
+
+
+def test_null_is_a_value_where_any_value_is(write):
+    pet = """
+        openapi: 3.1.0
+        info: {title: t, version: '1'}
+        paths: {}
+        components:
+          schemas:
+            Pet: {type: object, properties: {a: {type: [string, 'null'], default: %s}, b: {const: %s}}}
+        """
+    root = write({"a/openapi.yaml": pet % ("null", "null"), "b/openapi.yaml": pet % ("x", "5")})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    assert s.get("a").issues == []
+    b = s.get_schema("Pet", "a").fields[1]
+    assert (b.name, b.type) == ("b", "const None")
+    text = s.compare("Pet", "a", "b").to_text()
+    assert "breaking: const changed: b (none -> 5) [b:field/Pet.b]" in text
+    assert "info: default changed: a (none -> x) [b:field/Pet.a]" in text

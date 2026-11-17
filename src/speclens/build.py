@@ -126,25 +126,28 @@ class _Builder:
         return {} if out is _BAD else out
 
     def read(self, value, shape, doc: Document, ptr: str):
-        """`value` if it has `shape`'s JSON type. A key left empty (null) is absent, without a word, but for
-        `type`. A value written as the wrong scalar (`"true"`, `"40"`, `summary: 2020`) is read as what it says,
-        and other values are _BAD; either is said once as an `invalid-value` warning."""
-        key = pointer.split(ptr)[-1] if ptr else ""
-        if value is None and key != "type":
+        """`value` if it has `shape`'s JSON type. A value written as the wrong scalar (`"true"`, `"40"`,
+        `summary: 2020`) is read as what it says, other values are _BAD; either is said once as an `invalid-value`
+        warning. A key left empty (null) is as the shape says: a value (`const: null`), absent without a word,
+        or said (`type:`)."""
+        check, wording, empty = shape
+        if value is None and empty is not _KEEP:
+            if empty is not None:
+                self.warn_once(doc, ptr, empty)
             return _BAD
-        check, wording = shape
         out = check(value)
-        if out is not value and (doc.name, ptr, "shape") not in self.warned:
-            self.warned.add((doc.name, ptr, "shape"))
-            if value is None:
-                message = "`type` is empty, so no type is read; for the null type, write 'null' in quotes"
-            else:
-                what = "ignored" if out is _BAD else f"read as {_kind_of(out)}"
-                found = "a list holding other values" if isinstance(value, list) and shape in (_NAMES, _TYPE) \
-                    else _kind_of(value)
-                message = f"`{key}` should be {wording}, found {found}; {what}"
-            self.issues.append(Issue(WARNING, "invalid-value", message, doc.name, self.line(doc, ptr)))
+        if out is not value:
+            key = pointer.split(ptr)[-1] if ptr else ""
+            what = "ignored" if out is _BAD else f"read as {_kind_of(out)}"
+            found = "a list holding other values" if isinstance(value, list) and shape in (_NAMES, _TYPE) \
+                else _kind_of(value)
+            self.warn_once(doc, ptr, f"`{key}` should be {wording}, found {found}; {what}")
         return out
+
+    def warn_once(self, doc: Document, ptr: str, message: str):
+        if (doc.name, ptr, "shape") not in self.warned:
+            self.warned.add((doc.name, ptr, "shape"))
+            self.issues.append(Issue(WARNING, "invalid-value", message, doc.name, self.line(doc, ptr)))
 
     def resolve_ref(self, doc: Document, ptr: str, keyword: str = "$ref"):
         """The (document, pointer) the `$ref` (or `$dynamicRef`) at `ptr` points to, or None after reporting why
@@ -1213,9 +1216,6 @@ def _only(test):
     return lambda v: v if test(v) else _BAD
 
 
-# The JSON type of each value speclens reads into the graph, as (check, what it should be): the check gives the
-# value to keep, or _BAD. A value of another type is reported and left out, so the rest of the spec is still read
-# and nothing after this sees a value of the wrong type.
 def _flag(v):
     """True or false; the text `true` or `false` is read as that."""
     if isinstance(v, bool):
@@ -1241,17 +1241,23 @@ def _bound(v):
     return out if out is not _BAD else _flag(v)
 
 
-_TEXT = (_text, "text")
-_FLAG = (_flag, "true or false")
-_NUMBER = (_number, "a number")
-_BOUND = (_bound, "a number (or, in 3.0, true or false)")
-_NAMES = (_only(_is_names), "a list of names")
-_TYPE = (_only(lambda v: isinstance(v, str) or _is_names(v)), "a type name or a list of them")
-_LIST = (_only(lambda v: isinstance(v, list)), "a list")
-_MAP = (_only(lambda v: isinstance(v, dict)), "a map")
+# The JSON type of each value speclens reads into the graph, as a shape: (check, what the value should be, what a
+# key left empty is). The check gives the value to keep, or _BAD: a value of another type is reported and left
+# out, so the rest of the spec is still read and nothing after this sees a value of the wrong type. A key left
+# empty (null) is absent without a word (None), a value like any other (_KEEP: `const: null`), or the warning given.
+_KEEP = object()
+_TEXT = (_text, "text", None)
+_FLAG = (_flag, "true or false", None)
+_NUMBER = (_number, "a number", None)
+_BOUND = (_bound, "a number (or, in 3.0, true or false)", None)
+_NAMES = (_only(_is_names), "a list of names", None)
+_TYPE = (_only(lambda v: isinstance(v, str) or _is_names(v)), "a type name or a list of them",
+         "`type` is empty, so no type is read; for the null type, write 'null' in quotes")
+_LIST = (_only(lambda v: isinstance(v, list)), "a list", None)
+_MAP = (_only(lambda v: isinstance(v, dict)), "a map", None)
 _MAP_OF_NAMES = (_only(lambda v: isinstance(v, dict) and all(_is_names(x) for x in v.values())),
-                 "a map of lists of names")
-_ANY = (lambda v: v, "any value")
+                 "a map of lists of names", None)
+_ANY = (lambda v: v, "any value", _KEEP)
 SHAPES = {
     **dict.fromkeys(("title", "description", "format", "pattern", "operationId", "operationRef", "summary", "name",
                      "in", "style"), _TEXT),
