@@ -629,11 +629,16 @@ class _Comparer:
                             oa.id, ob.id), "request")
         pa = {(e.data["in"], e.data["name"]): ga.nodes[e.target] for e in ga.outgoing(oa.id, g.TAKES)}
         pb = {(e.data["in"], e.data["name"]): gb.nodes[e.target] for e in gb.outgoing(ob.id, g.TAKES)}
-        # The same operation with its path parameters named otherwise (/pets/{id} -> /pets/{petId}): each one
-        # renamed is said once, and compared with itself under its new name.
-        for old, new in zip(_path_parameters(oa.name), _path_parameters(ob.name)):
-            if old != new and ("path", new) not in pa and ("path", old) not in pb:
-                before, after = pa.pop(("path", old), None), pb.get(("path", new))
+        # The same operation with its path parameters named otherwise (/pets/{id} -> /pets/{petId}): which is
+        # which is their place in the path, not their names. Each renamed is said, and compared with the one
+        # declared in its place: every old one moves to its new name at once, so swapped names do not overwrite
+        # each other. One whose new name is not declared (the path renamed, the parameter not) stays by its name.
+        places = [(old, new) for old, new in zip(_path_parameters(oa.name), _path_parameters(ob.name)) if old != new]
+        if places:
+            moved = {("path", old): pa.pop(("path", old)) for old, new in places
+                     if ("path", old) in pa and ("path", new) in pb}
+            for old, new in places:
+                before, after = moved.get(("path", old)), pb.get(("path", new))
                 own(self.change("path-parameter-renamed", f"parameter path {new}", old, new, None,
                                 before.id if before else oa.id, after.id if after else ob.id), "request")
                 if before is not None:

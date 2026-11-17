@@ -1091,3 +1091,32 @@ def test_operations_are_paired_by_path_shape_only_when_one_on_each_side_is_left(
     d = s.diff("a", "b")
     assert (d.operations_added, d.operations_removed, list(d.operations_changed)) == (
         [], [], ["GET /pets/{petName}/toys/{toy}"])
+
+
+def test_in_a_paired_operation_path_parameters_are_matched_by_their_place(write):
+    def op(path, *params):
+        lines = "".join(f"            - {{name: {n}, in: path, required: true, schema: {{type: {t}}}}}\n"
+                        for n, t in params)
+        return f"      {path}:\n        get:\n          parameters:\n{lines}          responses: {{'200': {{description: ok}}}}\n"
+
+    def changes(a, b):
+        r = _two(write, a, b).diff("a", "b")
+        assert (r.operations_added, r.operations_removed) == ([], [])
+        [cs] = r.operations_changed.values()
+        return sorted((c.kind, c.where, c.before, c.after, c.level) for c in cs)
+
+    # Names swapped: each place is compared with itself, so its type changes are said.
+    assert changes(op("/a/{x}/b/{y}", ("x", "integer"), ("y", "string")),
+                   op("/a/{y}/b/{x}", ("x", "integer"), ("y", "string"))) == [
+        ("path-parameter-renamed", "parameter path x", "y", "x", "info"),
+        ("path-parameter-renamed", "parameter path y", "x", "y", "info"),
+        ("type-changed", "parameter path x", "string", "integer", "breaking"),
+        ("type-widened", "parameter path y", "integer", "string", "info")]
+    # A name moved along: two renames, nothing else changed.
+    assert changes(op("/a/{x}/b/{y}", ("x", "integer"), ("y", "string")),
+                   op("/a/{y}/b/{z}", ("y", "integer"), ("z", "string"))) == [
+        ("path-parameter-renamed", "parameter path y", "x", "y", "info"),
+        ("path-parameter-renamed", "parameter path z", "y", "z", "info")]
+    # The path renamed, the parameter's declaration not: the rename is still said.
+    assert changes(op("/pets/{id}", ("id", "string")), op("/pets/{petId}", ("id", "string"))) == [
+        ("path-parameter-renamed", "parameter path petId", "id", "petId", "info")]
