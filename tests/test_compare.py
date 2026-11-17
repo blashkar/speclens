@@ -1036,3 +1036,96 @@ def test_a_schema_kept_under_an_extension_key_is_named_like_a_component(write):
     assert [(c.kind, c.where) for c in s.compare("GET /box", "a", "b").changes] == [
         ("description-changed", "response 200 application/json: tags"),
         ("description-changed", "response 200 application/json: dims")]
+
+
+def _schema_pair(write, a: str, b: str):
+    spec = """
+        paths:
+          /x:
+            post:
+              requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/X'}}}}
+              responses: {'200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/X'}}}}}
+        components:
+          schemas:
+            X: %s
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(spec % a), "b/openapi.yaml": HEAD + dedent(spec % b)})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    return [(c.kind, c.before, c.after) for c in s.compare("X", "a", "b").changes]
+
+
+def test_additional_properties_from_anything_to_a_schema_to_nothing(write):
+    obj = "{type: object, properties: {n: {type: string}}%s}"
+    cases = {
+        ("", ", additionalProperties: true"): [],  # absent and true allow the same
+        ("", ", additionalProperties: false"): [("constraint-tightened", "additionalProperties: anything",
+                                                 "additionalProperties: false")],
+        ("", ", additionalProperties: {type: string}"): [("constraint-tightened", "additionalProperties: anything",
+                                                          "additionalProperties: a schema")],
+        (", additionalProperties: {type: string}", ", additionalProperties: false"): [
+            ("constraint-tightened", "additionalProperties: a schema", "additionalProperties: false")],
+        (", additionalProperties: false", ", additionalProperties: {type: string}"): [
+            ("constraint-loosened", "additionalProperties: false", "additionalProperties: a schema")],
+        (", additionalProperties: false", ""): [
+            ("constraint-loosened", "additionalProperties: false", "additionalProperties: anything")],
+        (", additionalProperties: {type: string}", ", additionalProperties: {type: integer}"): [
+            ("type-changed", "string", "integer")],
+    }
+    for (a, b), want in cases.items():
+        assert _schema_pair(write, obj % a, obj % b) == want, (a, b)
+
+
+def test_items_unique_items_and_multiple_of_are_compared(write):
+    cases = {
+        ("{type: array}", "{type: array, items: {type: integer}}"): [
+            ("constraint-tightened", "no items", "items: a schema")],
+        ("{type: array, items: {type: integer}}", "{type: array}"): [
+            ("constraint-loosened", "items: a schema", "no items")],
+        ("{type: array, items: {type: string}}", "{type: array, uniqueItems: true, items: {type: string}}"): [
+            ("constraint-tightened", "uniqueItems false", "uniqueItems true")],
+        ("{type: number, multipleOf: 0.1}", "{type: number, multipleOf: 0.01}"): [
+            ("constraint-loosened", "multipleOf 0.1", "multipleOf 0.01")],
+        ("{type: number, multipleOf: 0.01}", "{type: number, multipleOf: 0.1}"): [
+            ("constraint-tightened", "multipleOf 0.01", "multipleOf 0.1")],
+        ("{type: integer, multipleOf: 2}", "{type: integer, multipleOf: 3}"): [
+            ("multiple-of-changed", "multipleOf 2", "multipleOf 3")],
+        ("{type: integer}", "{type: integer, multipleOf: 5}"): [
+            ("constraint-tightened", "multipleOf none", "multipleOf 5")],
+        ("{type: array, prefixItems: [{type: string}]}", "{type: array, prefixItems: [{type: string}, {type: integer}]}"): [
+            ("prefix-items-changed", "1 position", "2 positions")],
+    }
+    for (a, b), want in cases.items():
+        assert _schema_pair(write, a, b) == want, (a, b)
+
+
+def test_a_request_body_made_optional_and_a_parameter_written_otherwise(write):
+    op = """
+        paths:
+          /x:
+            post:
+              parameters:
+                - {name: ids, in: query, %s schema: {type: array, items: {type: string}}}
+                - {name: page, in: query, schema: {type: integer}}
+              requestBody: {required: %s, content: {application/json: {schema: {type: object}}}}
+              responses: {'200': {description: ok}}
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(op % ("", "true")),
+                  "b/openapi.yaml": HEAD + dedent(op % ("explode: false,", "false"))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    assert sorted((c.kind, c.where, c.before, c.after, c.level) for c in s.compare("POST /x", "a", "b").changes) == [
+        ("parameter-serialization-changed", "parameter query ids", "style form, explode true",
+         "style form, explode false", "breaking"),
+        ("required-removed", "request body", None, None, "info")]
+
+
+def test_items_or_values_on_one_side_of_a_field_written_inline(write):
+    field = "{type: object, properties: {n: %s}}"
+    assert _schema_pair(write, field % "{type: array}", field % "{type: array, items: {type: integer}}") == [
+        ("constraint-tightened", "no items", "items: a schema")]
+    assert _schema_pair(write, field % "{type: object, additionalProperties: {type: string}}",
+                        field % "{type: object}") == [
+        ("constraint-loosened", "additionalProperties: a schema", "additionalProperties: anything")]

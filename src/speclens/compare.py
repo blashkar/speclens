@@ -15,6 +15,7 @@ import math
 import re
 from collections import deque
 from dataclasses import dataclass, field, replace
+from fractions import Fraction
 
 from . import graph as g
 from .graph import Graph, Node
@@ -56,6 +57,13 @@ RULES = {
     "pattern-added": (BREAKING, INFO),
     "pattern-removed": (INFO, WARNING),
     "pattern-changed": (WARNING, WARNING),
+    # multipleOf to a value that is neither a multiple nor a divisor of the old one: some values valid before are
+    # not now, and the reverse (oasdiff: multiple-of-changed, error both ways)
+    "multiple-of-changed": (BREAKING, BREAKING),
+    "prefix-items-changed": (WARNING, WARNING),  # a tuple's positions added or removed (oasdiff: warning both ways)
+    # how a parameter's value is written in the URL or header (style, explode): clients that write it the old way
+    # send what the API no longer reads
+    "parameter-serialization-changed": (BREAKING, BREAKING),
     "default-changed": (INFO, INFO),
     "deprecated": (INFO, INFO),
     "undeprecated": (INFO, INFO),
@@ -356,6 +364,14 @@ class _Comparer:
                     wider = ba[1] and not bb[1]
                 kind = "constraint-loosened" if wider else "constraint-tightened"
             out.append(self.change(kind, where, _bound_text(ba, end), _bound_text(bb, end), side, a, b))
+        if bool(da.get("uniqueItems")) != bool(db.get("uniqueItems")):
+            out.append(self.change("constraint-tightened" if db.get("uniqueItems") else "constraint-loosened", where,
+                                   f"uniqueItems {str(bool(da.get('uniqueItems'))).lower()}",
+                                   f"uniqueItems {str(bool(db.get('uniqueItems'))).lower()}", side, a, b))
+        kind = _multiple_of(da.get("multipleOf"), db.get("multipleOf"))
+        if kind:
+            out.append(self.change(kind, where, f"multipleOf {_show(da.get('multipleOf'))}",
+                                   f"multipleOf {_show(db.get('multipleOf'))}", side, a, b))
         pa, pb = da.get("pattern"), db.get("pattern")
         if pa != pb:
             kind = "pattern-added" if pa is None else "pattern-removed" if pb is None else "pattern-changed"
@@ -420,9 +436,12 @@ class _Comparer:
             changes, children = self.typed(f1, f2, name, g.FIELD_TYPE)
             out += changes
             kids += children
+        all_a, all_b = {}, {}
         for kind, label in ((g.ITEMS, "[]"), (g.VALUES, "{}")):
             ia = {_edge_key(e): e for e in ga.outgoing(sa.id, kind)}
             ib = {_edge_key(e): e for e in gb.outgoing(sb.id, kind)}
+            all_a.update(ia)
+            all_b.update(ib)
             for k in [k for k in ia if k in ib]:
                 step = label if k in ("items", "additionalProperties") else f"{label}{k}"
                 out_, kids_ = self.matched(ga.nodes[ia[k].target], gb.nodes[ib[k].target], step)
@@ -430,6 +449,8 @@ class _Comparer:
                 kids += kids_
         oa = {_option_key(ga, e): e for e in ga.outgoing(sa.id, g.OPTION)}
         ob = {_option_key(gb, e): e for e in gb.outgoing(sb.id, g.OPTION)}
+        if bool(oa) == bool(ob):  # restructured into options (or out of them): said as that, below
+            out += self.one_sided(sa, sb, all_a, all_b)
         if ob and not oa:
             # Still accepting what it accepted if one option takes everything the old schema did.
             compatible = any(self.accepts_all(sa, gb.nodes[e.target]) for e in ob.values())
@@ -568,6 +589,11 @@ class _Comparer:
                 for name, (f, _) in (_fields(self.ga, sa) if sa else {}).items():
                     out.append(self.change("field-removed", _join(where, name), describe(self.ga, f), None, None,
                                            f.id, None))
+                # and a schema for its items or values on one side only
+                edges_a, edges_b = ({_edge_key(e): e for k in (g.ITEMS, g.VALUES) for e in graph.outgoing(s.id, k)}
+                                    if s else {} for graph, s in ((self.ga, sa), (self.gb, sb)))
+                out += [replace(c, where=_join(where, c.where)) for c in
+                        self.one_sided(sa or na, sb or nb, edges_a, edges_b)]
             else:
                 out.append(self.change("type-changed", where, describe(self.ga, na), describe(self.gb, nb), None,
                                        na.id, nb.id))
@@ -609,6 +635,36 @@ class _Comparer:
             queue.extend((_join(where, step), child, *rest) for step, child, *rest in children)
         return out
 
+    def one_sided(self, sa: Node, sb: Node, ia: dict, ib: dict) -> list[Change]:
+        """A schema for items or values (items, contains, patternProperties, additionalProperties, ...) on one
+        side only. Where there is none, anything is allowed: adding one tightens, removing one loosens. For
+        additionalProperties and unevaluatedProperties, `false` allows nothing, a schema some values, and none (or
+        `true`) anything. prefixItems positions added or removed are a warning, as their meaning depends on
+        `items` beside them."""
+        out = []
+        ka = {k for k in ia if k not in ib}
+        kb = {k for k in ib if k not in ia}
+        if any(k.startswith("prefixItems/") for k in ka | kb):
+            out.append(self.change("prefix-items-changed", "", _positions(ia), _positions(ib), None, sa.id, sb.id))
+        for k in sorted(kb - {"additionalProperties", "unevaluatedProperties"}):
+            if not k.startswith("prefixItems/"):
+                out.append(self.change("constraint-tightened", "", f"no {k}", f"{k}: a schema", None, sa.id,
+                                       ib[k].target))
+        for k in sorted(ka - {"additionalProperties", "unevaluatedProperties"}):
+            if not k.startswith("prefixItems/"):
+                out.append(self.change("constraint-loosened", "", f"{k}: a schema", f"no {k}", None, ia[k].target,
+                                       sb.id))
+        for k in ("additionalProperties", "unevaluatedProperties"):
+            # 0: anything (none, or true), 1: a schema, 2: nothing (false)
+            wa = 2 if sa.data.get(k) is False else 1 if k in ia else 0
+            wb = 2 if sb.data.get(k) is False else 1 if k in ib else 0
+            if wa != wb and not (wa == wb == 1):
+                text = ("anything", "a schema", "false")
+                out.append(self.change("constraint-tightened" if wb > wa else "constraint-loosened", "",
+                                       f"{k}: {text[wa]}", f"{k}: {text[wb]}", None,
+                                       ia[k].target if wa == 1 else sa.id, ib[k].target if wb == 1 else sb.id))
+        return out
+
     def operations(self, oa: Node, ob: Node) -> list[Change]:
         ga, gb = self.ga, self.gb
         out: list[Change] = []
@@ -637,6 +693,9 @@ class _Comparer:
                             pa[k].id, None), "request")
         for k in [k for k in pa if k in pb]:
             where = f"parameter {k[0]} {k[1]}"
+            wa, wb = _serialization(pa[k].data, k[0]), _serialization(pb[k].data, k[0])
+            if wa != wb:
+                own(self.change("parameter-serialization-changed", where, wa, wb, None, pa[k].id, pb[k].id), "request")
             if bool(pa[k].data.get("required")) != bool(pb[k].data.get("required")):
                 own(self.change("required-added" if pb[k].data.get("required") else "required-removed", where,
                                 None, None, None, pa[k].id, pb[k].id), "request")
@@ -657,9 +716,10 @@ class _Comparer:
             own(self.change("request-body-removed", "request body", ", ".join(ra), None, None, oa.id, None),
                 "request")
         else:
-            if any(e.data.get("required") for e in rb.values()) and not any(e.data.get("required")
-                                                                              for e in ra.values()):
-                own(self.change("required-added", "request body", None, None, None, oa.id, ob.id), "request")
+            required_a, required_b = (any(e.data.get("required") for e in r.values()) for r in (ra, rb))
+            if required_a != required_b:
+                own(self.change("required-added" if required_b else "required-removed", "request body", None, None,
+                                None, oa.id, ob.id), "request")
             for mt in [m for m in rb if m not in ra]:
                 own(self.change("media-type-added", f"request body {mt}", None, None, None, None, ob.id), "request")
             for mt in [m for m in ra if m not in rb]:
@@ -881,6 +941,41 @@ def _moved(ga: Graph, ea, gb: Graph, eb, schema_b: Node) -> bool:
         return True
     parents = {gb.nodes[v].name for e in gb.outgoing(schema_b.id, g.HAS_FIELD) for v in e.data.get("via") or []}
     return _writer(ga, ea) in parents
+
+
+_STYLES = {"query": "form", "cookie": "form", "path": "simple", "header": "simple"}
+
+
+def _serialization(data: dict, where: str) -> str:
+    """How a parameter's value is written, with OpenAPI's defaults: `style form, explode true`."""
+    style = data.get("style") or _STYLES.get(where, "simple")
+    explode = data.get("explode") if isinstance(data.get("explode"), bool) else style == "form"
+    return f"style {style}, explode {str(explode).lower()}"
+
+
+def _multiple_of(va, vb) -> str | None:
+    """The kind of change from `multipleOf: va` to `multipleOf: vb`, exactly (0.1 and 0.01 as written, not as
+    floats): a multiple of the old allows fewer values, a divisor of it more, anything else other values."""
+    if not all(v is None or isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 for v in (va, vb)):
+        return None
+    if va == vb:
+        return None
+    if va is None:
+        return "constraint-tightened"
+    if vb is None:
+        return "constraint-loosened"
+    fa, fb = Fraction(str(va)), Fraction(str(vb))
+    if (fb / fa).denominator == 1:
+        return "constraint-tightened"
+    if (fa / fb).denominator == 1:
+        return "constraint-loosened"
+    return "multiple-of-changed"
+
+
+def _positions(edges: dict) -> str:
+    """How many positions a tuple (prefixItems) has: "2 positions"."""
+    n = sum(k.startswith("prefixItems/") for k in edges)
+    return f"{n} position{'s' * (n != 1)}"
 
 
 def _edge_key(e) -> str:
