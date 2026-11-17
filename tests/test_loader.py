@@ -62,6 +62,36 @@ def test_alias_is_expanded(tmp_path):
     assert doc.data["b"] == {"k": 1}
 
 
+def test_merge_keys_fill_in_what_the_mapping_does_not_write(tmp_path):
+    doc = load_text(tmp_path, """\
+base: &base
+  type: object
+  title: base
+more: &more
+  title: more
+  x-a: 1
+one:
+  <<: *base
+  title: own
+two:
+  <<: [*more, *base]
+quoted:
+  "<<": *base
+odd:
+  <<: 5
+  type: string
+""")
+    assert doc.data["one"] == {"title": "own", "type": "object"}  # its own keys win
+    assert doc.data["two"] == {"title": "more", "x-a": 1, "type": "object"}  # an earlier mapping wins
+    assert doc.data["quoted"] == {"<<": {"type": "object", "title": "base"}}  # a quoted "<<" is a key
+    assert doc.data["odd"] == {"type": "string"}
+    assert doc.lines["/one/type"] == (2, 2) and doc.lines["/one"] == (7, 9)  # cited where written
+    assert doc.lines["/two/x-a"] == (6, 6)
+    assert [(i.code, i.line) for i in doc.issues] == [("yaml-merge-key", 8), ("yaml-merge-key", 11),
+                                                      ("yaml-merge-key", 15)]
+    assert "takes a mapping" in doc.issues[2].message and "some tools will not read it" in doc.issues[0].message
+
+
 def test_pointer_escaping():
     assert pointer.join("", "paths", "/pets/{id}", "get") == "/paths/~1pets~1{id}/get"
     assert pointer.split("/paths/~1pets~1{id}/a~0b") == ["paths", "/pets/{id}", "a~b"]

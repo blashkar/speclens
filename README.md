@@ -190,6 +190,12 @@ names (reported as `outside-allowed`). A file nested more than 200 levels deep, 
 parts of it into more than 100,000 values, is refused as `too-large` instead of read; real specs stay far below
 both.
 
+YAML is read as YAML 1.2, as OpenAPI requires (`yes` is text, `010` is ten), with one YAML 1.1 feature kept
+because hand-written specs use it: the merge key. `<<: *base`, or a list of mappings, fills in the keys the
+mapping does not write itself, an earlier mapping in the list first, and a merged value cites the lines where it
+was written. YAML 1.2 has no merge key and some tools will not read it, so `validate` reports each one as a
+warning (`yaml-merge-key`). A quoted `"<<"` is an ordinary key.
+
 ## Compare two specs
 
 Two versions of an API, or a branch and its main line. This answers questions about one thing at a time, in
