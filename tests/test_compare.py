@@ -1036,3 +1036,26 @@ def test_a_schema_kept_under_an_extension_key_is_named_like_a_component(write):
     assert [(c.kind, c.where) for c in s.compare("GET /box", "a", "b").changes] == [
         ("description-changed", "response 200 application/json: tags"),
         ("description-changed", "response 200 application/json: dims")]
+
+
+def test_const_and_enum_values_are_compared_as_the_json_values_they_are(write):
+    spec = """
+        paths: {}
+        components:
+          schemas:
+            Flag:
+              properties:
+                one: {const: %s}
+                some: {enum: %s}
+                same: {enum: [.nan, 2]}
+                list: {const: [0, %s]}
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(spec % ("1", "[1, 2]", "1")),
+                  "b/openapi.yaml": HEAD + dedent(spec % ("true", "[true, 2]", "true"))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    # 1 and true are different values; NaN is the same as NaN.
+    assert sorted((c.kind, c.where, c.before, c.after) for c in s.compare("Flag", "a", "b").changes) == [
+        ("const-changed", "list", "[0, 1]", "[0, True]"), ("const-changed", "one", "1", "True"),
+        ("enum-value-added", "some", None, "True"), ("enum-value-removed", "some", "1", None)]

@@ -193,6 +193,11 @@ def _same_value(x, y) -> bool:
     return x == y
 
 
+def _among(value, values: list) -> bool:
+    """`value` is one of `values`, as JSON values."""
+    return any(_same_value(value, v) for v in values)
+
+
 def _show(v) -> str:
     return "none" if v is None else str(v)
 
@@ -318,15 +323,16 @@ class _Comparer:
         if fa != fb:
             kind = "format-added" if fa is None else "format-removed" if fb is None else "format-changed"
             out.append(self.change(kind, where, fa, fb, side, a, b))
-        # `const: x` and `enum: [x]` allow the same one value: compared as the values each allows.
+        # `const: x` and `enum: [x]` allow the same one value: compared as the values each allows, as JSON values
+        # (`true` is not `1`).
         ea, eb = _allowed(da), _allowed(db)
         if "const" in da and "const" in db:
-            if da["const"] != db["const"]:
+            if not _same_value(da["const"], db["const"]):
                 out.append(self.change("const-changed", where, da["const"], db["const"], side, a, b))
         elif isinstance(ea, list) and isinstance(eb, list):
-            for v in [v for v in eb if v not in ea]:
+            for v in [v for v in eb if not _among(v, ea)]:
                 out.append(self.change("enum-value-added", where, None, repr(v), side, a, b))
-            for v in [v for v in ea if v not in eb]:
+            for v in [v for v in ea if not _among(v, eb)]:
                 out.append(self.change("enum-value-removed", where, repr(v), None, side, a, b))
         elif isinstance(eb, list) and ea is None:
             out.append(self.change("constraint-tightened", where, "any value", f"enum of {len(eb)}", side, a, b))
