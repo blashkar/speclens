@@ -64,6 +64,9 @@ RULES = {
     # how a parameter's value is written in the URL or header (style, explode): clients that write it the old way
     # send what the API no longer reads
     "parameter-serialization-changed": (BREAKING, BREAKING),
+    # a single value's style changed to one OpenAPI defines only for arrays and objects (or back): what is sent
+    # then is not defined, so it is said without claiming it breaks
+    "parameter-style-undefined": (WARNING, WARNING),
     "default-changed": (INFO, INFO),
     "deprecated": (INFO, INFO),
     "undeprecated": (INFO, INFO),
@@ -694,8 +697,9 @@ class _Comparer:
         for k in [k for k in pa if k in pb]:
             where = f"parameter {k[0]} {k[1]}"
             wa, wb = _serialization(pa[k].data, k[0]), _serialization(pb[k].data, k[0])
-            if wa != wb:
-                own(self.change("parameter-serialization-changed", where, wa, wb, None, pa[k].id, pb[k].id), "request")
+            kind = _serialization_change(wa, wb, k[0], _param_types(ga, pa[k]) | _param_types(gb, pb[k]))
+            if kind:
+                own(self.change(kind, where, wa, wb, None, pa[k].id, pb[k].id), "request")
             if bool(pa[k].data.get("required")) != bool(pb[k].data.get("required")):
                 own(self.change("required-added" if pb[k].data.get("required") else "required-removed", where,
                                 None, None, None, pa[k].id, pb[k].id), "request")
@@ -951,6 +955,32 @@ def _serialization(data: dict, where: str) -> str:
     style = data.get("style") or _STYLES.get(where, "simple")
     explode = data.get("explode") if isinstance(data.get("explode"), bool) else style == "form"
     return f"style {style}, explode {str(explode).lower()}"
+
+
+_PRIMITIVE = {"string", "integer", "number", "boolean"}
+
+
+def _param_types(graph: Graph, param: Node) -> set:
+    """The types a parameter's value may have, from its schema written inline or reached through `$ref`; empty when
+    not known."""
+    edges = graph.outgoing(param.id, g.PARAM_TYPE)
+    node = graph.nodes[edges[0].target] if edges else param
+    return _types(node.data) or _option_types(graph, node)
+
+
+def _serialization_change(wa: str, wb: str, where: str, types: set) -> str | None:
+    """The kind of change from one way of writing a parameter to another, or None when the value is sent the same.
+    A single value (string, number, boolean) is written the same whatever `explode` says; its style matters in a
+    path (simple `5`, label `.5`, matrix `;id=5`), and elsewhere only `form` and `simple` are defined for it. An
+    array, an object or a value of unknown type: any change is breaking."""
+    if wa == wb:
+        return None
+    if not types or not types <= _PRIMITIVE:
+        return "parameter-serialization-changed"
+    sa, sb = wa.split(",")[0], wb.split(",")[0]
+    if sa == sb:
+        return None
+    return "parameter-serialization-changed" if where == "path" else "parameter-style-undefined"
 
 
 def _multiple_of(va, vb) -> str | None:

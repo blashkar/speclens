@@ -1129,3 +1129,34 @@ def test_items_or_values_on_one_side_of_a_field_written_inline(write):
     assert _schema_pair(write, field % "{type: object, additionalProperties: {type: string}}",
                         field % "{type: object}") == [
         ("constraint-loosened", "additionalProperties: a schema", "additionalProperties: anything")]
+
+
+def test_a_single_value_is_sent_the_same_whatever_explode_says(write):
+    op = """
+        paths:
+          /x:
+            post:
+              parameters:
+                - {name: limit, in: query, %s schema: {type: integer}}
+                - {name: trace, in: header, %s schema: {type: integer}}
+                - {name: ids, in: query, %s schema: {type: array, items: {type: integer}}}
+                - {name: id, in: path, required: true, %s schema: {$ref: '#/components/schemas/Id'}}
+                - {name: sort, in: query, %s schema: {type: string}}
+              responses: {'200': {description: ok}}
+        components:
+          schemas:
+            Id: {type: integer}
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(op % ("", "", "", "", "")),
+                  "b/openapi.yaml": HEAD + dedent(op % ("explode: false,", "explode: true,", "explode: false,",
+                                                         "style: label,", "style: deepObject,"))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    assert sorted((c.kind, c.where, c.before, c.after, c.level) for c in s.compare("POST /x", "a", "b").changes) == [
+        ("parameter-serialization-changed", "parameter path id", "style simple, explode false",
+         "style label, explode false", "breaking"),
+        ("parameter-serialization-changed", "parameter query ids", "style form, explode true",
+         "style form, explode false", "breaking"),
+        ("parameter-style-undefined", "parameter query sort", "style form, explode true",
+         "style deepObject, explode false", "warning")]
