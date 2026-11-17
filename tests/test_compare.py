@@ -1252,3 +1252,32 @@ def test_no_keyword_read_into_the_graph_changes_silently(write):
                 continue
             for a, b in ((x, ""), ("", x), (x, y)):
                 assert _schema_pair(write, where % a, where % b), (where, a, b)
+
+
+def test_a_requirement_is_compared_whether_or_not_its_name_is_declared(write):
+    spec = """
+        paths:
+          /x:
+            get:
+              responses: {'200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/X'}}}}}
+        components:
+          schemas:
+            X: {type: object, properties: {n: {type: string}}, dependentSchemas: {n: %s}}
+        """
+
+    def changes(a, b):
+        root = write({"a/openapi.yaml": HEAD + dedent(spec % a), "b/openapi.yaml": HEAD + dedent(spec % b)})
+        s = SpecSet()
+        s.load(root / "a/openapi.yaml", "a")
+        s.load(root / "b/openapi.yaml", "b")
+        return sorted((c.kind, c.where, c.level) for c in s.compare("GET /x", "a", "b").changes)
+
+    undeclared = "{required: [kind]}"
+    optional = "{properties: {kind: {maxLength: 3}}}"
+    required = "{properties: {kind: {maxLength: 3}}, required: [kind]}"
+    where = "response 200 application/json: dependentSchemas/n.kind"
+    assert changes(undeclared, optional) == [("field-added", where, "info"), ("required-removed", where, "breaking")]
+    assert changes(optional, undeclared) == [("field-removed", where, "info"), ("required-added", where, "info")]
+    assert changes(undeclared, required) == [("required-field-added", where, "info")]  # said once
+    assert changes("{type: object}", required) == [("required-field-added", where, "info")]
+    assert changes(required, "{type: object}") == [("required-field-removed", where, "breaking")]

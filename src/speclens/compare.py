@@ -60,10 +60,10 @@ RULES = {
     # multipleOf to a value that is neither a multiple nor a divisor of the old one: some values valid before are
     # not now, and the reverse (oasdiff: multiple-of-changed, error both ways)
     "multiple-of-changed": (BREAKING, BREAKING),
-    "prefix-items-changed": (WARNING, WARNING),
+    "prefix-items-changed": (WARNING, WARNING),  # a tuple's positions added or removed (oasdiff: warning both ways)
     # what `if` tests or `not` excludes, changed: which values that admits or refuses depends on the rest of the
     # schema, so its direction is not guessed
-    "condition-changed": (WARNING, WARNING),  # a tuple's positions added or removed (oasdiff: warning both ways)
+    "condition-changed": (WARNING, WARNING),
     # how a parameter's value is written in the URL or header (style, explode): clients that write it the old way
     # send what the API no longer reads
     "parameter-serialization-changed": (BREAKING, BREAKING),
@@ -421,7 +421,7 @@ class _Comparer:
         out += [self.change("parent-added", "", None, p, None, sa.id, sb.id) for p in sorted(pb - pa)]
         out += [self.change("parent-removed", "", p, None, None, sa.id, sb.id) for p in sorted(pa - pb)]
         fa, fb = _fields(ga, sa), _fields(gb, sb)
-        out += self.required_names(sa.data, sb.data, set(fa) | set(fb), "", sa.id, sb.id)
+        out += self.required_names(sa.data, sb.data, _required_flags(fa), _required_flags(fb), "", sa.id, sb.id)
         options_a, options_b = ga.outgoing(sa.id, g.OPTION), gb.outgoing(sb.id, g.OPTION)
         if options_b and not options_a and not fb or options_a and not options_b and not fa:
             fa, fb = {}, {}  # restructured into (or out of) options: the options' comparison covers the fields
@@ -574,15 +574,15 @@ class _Comparer:
             return said + out, [(step, key, kinds) for step, key in kids]
         if not ta and not tb:
             return self.values(na.data, nb.data, where, None, na.id, nb.id) + \
-                self.required_names(na.data, nb.data, set(), where, na.id, nb.id), []
+                self.required_names(na.data, nb.data, {}, {}, where, na.id, nb.id), []
         # Written inline on one side, a schema on the other: compare what each one is.
         sa = self.ga.nodes[ta[0]] if ta else None
         sb = self.gb.nodes[tb[0]] if tb else None
         da = {**(sa.data if sa else na.data), **_annotations(na.data)}
         db = {**(sb.data if sb else nb.data), **_annotations(nb.data)}
         out = self.values(da, db, where, None, na.id, nb.id)
-        out += self.required_names(da, db, set(_fields(self.ga, sa) if sa else {}) | set(_fields(self.gb, sb) if sb else {}),
-                                   where, na.id, nb.id)
+        out += self.required_names(da, db, _required_flags(_fields(self.ga, sa) if sa else {}),
+                                   _required_flags(_fields(self.gb, sb) if sb else {}), where, na.id, nb.id)
         ea = _types(da) or (_option_types(self.ga, sa) if sa else set())
         eb = _types(db) or (_option_types(self.gb, sb) if sb else set())
         if ea and eb and ea != eb and not (_types(da) and _types(db)):
@@ -684,12 +684,17 @@ class _Comparer:
                                        ia[k].target if wa == 1 else sa.id, ib[k].target if wb == 1 else sb.id))
         return out
 
-    def required_names(self, da: dict, db: dict, declared: set, where: str, a, b) -> list[Change]:
-        """Names a schema makes required without declaring them as its fields (in `then`, under `not`, a parent's
-        fields): compared as names. The declared ones are compared on their fields."""
-        ra, rb = (set(_names(d.get("required"))) - declared for d in (da, db))
-        return [self.change("required-added", _join(where, n), None, None, None, a, b) for n in sorted(rb - ra)] + \
-            [self.change("required-removed", _join(where, n), None, None, None, a, b) for n in sorted(ra - rb)]
+    def required_names(self, da: dict, db: dict, fa: dict, fb: dict, where: str, a, b) -> list[Change]:
+        """Names a schema makes required, declared as its fields or not (in `then`, under `not`, a parent's fields),
+        given its fields as {name: required}. A field declared on the newer side says its own requirement (as
+        required-added or a required field added), and likewise for the older side, so only the rest is said here:
+        a name required without being declared, on one side, and not required on the other."""
+        ra = set(_names(da.get("required"))) | {n for n, r in fa.items() if r}
+        rb = set(_names(db.get("required"))) | {n for n, r in fb.items() if r}
+        return [self.change("required-added", _join(where, n), None, None, None, a, b)
+                for n in sorted(rb - ra) if n not in fb] + \
+            [self.change("required-removed", _join(where, n), None, None, None, a, b)
+             for n in sorted(ra - rb) if n not in fa]
 
     def conditions(self, sa: Node, sb: Node):
         """`not`, `if`, `then`, `else` and dependentSchemas, as (changes, pairs below). `then`, `else` and a
@@ -1101,6 +1106,11 @@ def _edge_key(e) -> str:
     if keyword == "dependentSchemas":
         return f"{keyword}/{e.data['when']}"
     return keyword
+
+
+def _required_flags(fields: dict) -> dict:
+    """{name: required} for the fields _fields gives."""
+    return {n: e.data["required"] for n, (_, e) in fields.items()}
 
 
 def _names(value) -> list:
