@@ -79,11 +79,12 @@ def trim_path(path: str) -> str:
 
 
 # A label: letters, digits and `_` (any script), `.`, `+` and `-`, so semver such as 1.0.0-rc.1 and 1.0.0+build5
-# fits. Ids are written `label:kind/name`, and verify reads them back with this same rule.
-LABEL = r"[\w.+-]+"
+# fits; it starts and ends with a letter, digit or `_`, so a lone "." (the end of every sentence) is never one. Ids
+# are written `label:kind/name`, and verify reads them back with this same rule.
+LABEL = r"\w(?:[\w.+-]*\w)?"
 
 
 def as_label(text: str | None) -> str | None:
     """A label made from a version or a name: other characters become `-` ("2.0 beta" -> "2.0-beta")."""
-    label = re.sub(r"[^\w.+-]+", "-", text or "").strip("-")
+    label = re.sub(r"[^\w.+-]+", "-", text or "").strip(".+-")
     return label or None

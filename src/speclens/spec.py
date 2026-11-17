@@ -84,7 +84,8 @@ class Spec:
 
 def check_label(label: str) -> str:
     if not isinstance(label, str) or not re.fullmatch(LABEL, label):
-        raise ValueError(f"a label is letters, digits, '_', '.', '+' and '-' only (no spaces, ':' or '/'): {label!r}")
+        raise ValueError(f"a label is letters, digits, '_', '.', '+' and '-' only, starting and ending with a letter, "
+                         f"digit or '_' (no spaces, ':' or '/'): {label!r}")
     return label
 
 

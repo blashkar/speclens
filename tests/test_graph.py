@@ -299,7 +299,7 @@ def test_a_label_is_letters_digits_dots_plus_and_minus(write, tmp_path):
     root = write({"openapi.yaml": HEAD})
     for good in ("1.0.0-rc.1", "1.0.0+build5", "2024_06", "版本2"):
         assert load_spec(root / "openapi.yaml", good).label == good
-    for bad in ("2.0 beta", "a:b", "a/b", "", " v1", "v1 ", "v1(beta)"):
+    for bad in ("2.0 beta", "a:b", "a/b", "", " v1", "v1 ", "v1(beta)", ".", "-x", "1.0.", "+"):
         with pytest.raises(ValueError, match=r"letters, digits, '_', '\.', '\+' and '-' only"):
             load_spec(root / "openapi.yaml", bad)
 
@@ -307,12 +307,15 @@ def test_a_label_is_letters_digits_dots_plus_and_minus(write, tmp_path):
 def test_the_default_label_is_info_version_as_written(write):
     head = "openapi: 3.1.0\ninfo:\n  title: t\n  version: %s\npaths: {}\n"
     cases = {"1.10": "1.10", "'1.10'": "1.10", "|\n    1.10": "1.10", "2.0 beta": "2.0-beta",
-             "1.0.0+build5": "1.0.0+build5", "'v2 (preview)'": "v2-preview", "1e3": "1e3", "0x1F": "0x1F"}
+             "1.0.0+build5": "1.0.0+build5", "'v2 (preview)'": "v2-preview", "1e3": "1e3", "0x1F": "0x1F",
+             "v1.": "v1", "'-.+'": "openapi"}  # nothing left: the file's name
     for i, (written, label) in enumerate(cases.items()):
         folder = write({f"c{i}/openapi.yaml": head % written})
         assert load_spec(folder / f"c{i}" / "openapi.yaml").label == label, written
     folder = write({"j/openapi.json": '{"openapi": "3.1.0", "info": {"title": "t", "version": 1.10}, "paths": {}}'})
     assert load_spec(folder / "j" / "openapi.json").label == "1.10"
+    from speclens.text import as_label
+    assert [as_label(t) for t in ("v1.", "+1.0-", "...", None)] == ["v1", "1.0", None, None]
     folder = write({"my api/openapi.yaml": head % "'?'"})  # nothing usable in the version: the folder's name
     assert load_spec(folder / "my api" / "openapi.yaml").label == "openapi"
     assert load_spec(folder / "my api").label == "my-api"
