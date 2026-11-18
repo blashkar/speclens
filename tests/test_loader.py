@@ -159,3 +159,10 @@ def test_a_tag_after_an_anchor_still_counts(tmp_path):
     p = tmp_path / "a.yaml"
     p.write_text("a: &x !!str 123\nb: *x\nc: !!str &y 456\nd: &z 789\ne: ! 10\nf: &w ! true\ng: !!int '11'\n")
     assert load(p, "a.yaml").data == {"a": "123", "b": "123", "c": "456", "d": 789, "e": "10", "f": "true", "g": 11}
+
+
+def test_binary_and_timestamp_tags_are_read_as_the_json_strings_they_stand_for(tmp_path):
+    doc = load_text(tmp_path, "a: !!binary aGk=\nb: !!binary |\n  aGVs\n  bG8=\nc: !!timestamp 2021-01-01\n"
+                              "d: !!timestamp 2021-01-01T10:00:00Z\ne: !!float 1\n")
+    assert doc.data == {"a": "aGk=", "b": "aGVsbG8=", "c": "2021-01-01", "d": "2021-01-01T10:00:00Z", "e": 1.0}
+    assert doc.issues == []

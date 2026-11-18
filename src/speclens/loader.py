@@ -67,9 +67,16 @@ def _scalar(node, text: str):
     if node.tag == "tag:yaml.org,2002:str":
         return node.value
     try:
-        return _constructor.construct_object(node)
+        value = _constructor.construct_object(node)
     except yaml.YAMLError:
         return node.value  # a tag nobody here knows: keep the text
+    # A spec is JSON, which has no bytes and no dates: `!!binary` keeps its base64 text (as a JSON string carries
+    # binary), and `!!timestamp` its date as written, as a date with no tag does.
+    if isinstance(value, bytes):
+        return "".join(node.value.split())
+    if not isinstance(value, (str, int, float, bool)) and value is not None:
+        return node.value
+    return value
 
 
 @dataclass
