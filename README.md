@@ -211,6 +211,13 @@ change once, in the first operation it breaks, with the other operations it brea
 removed, and a count of the other changes. `full=True` lists every breaking change and those other changes too,
 by schema and by operation, and JSON always has every change.
 
+Constraints on what a value may be are compared both ways: a limit, `multipleOf` (a multiple of the old value
+allows fewer, a divisor more, anything else is breaking either way), `uniqueItems`, and a schema for items or
+values (`items`, `contains`, `patternProperties`, `propertyNames`, `additionalProperties`) on one side only. With
+none there, anything is allowed; for `additionalProperties`, `false` allows nothing. A parameter written another
+way in the URL (`style`, `explode`) is breaking, unless it is a single value sent the same way either
+way (`explode` changes nothing for a string or a number), and a request body made optional is info.
+
 The same thing written another way is no change: OpenAPI 3.0's `maximum: 5` with `exclusiveMaximum: true` and
 3.1's `exclusiveMaximum: 5` are one bound, and `enum: [x]` and `const: x` allow the same value.
 A field now written on a parent the schema inherits from with allOf (or no longer) is the same field: it is
