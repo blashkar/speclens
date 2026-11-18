@@ -103,7 +103,7 @@ def build_server(specs: SpecSet, allow: list[Path] | None = None):
         operations that use it. `name` as written (Pet), in another case, in plain words (pet owners), or an id.
         `full=False` cuts long descriptions. `expand=1` adds the schemas its fields hold; `max_chars` leaves out the
         deepest of them, by name, beyond that size."""
-        return answer(lambda: specs.get_schema(name, label, expand, max_chars), full)
+        return answer(lambda: specs.get_schema(name, label, expand, max_chars, full=full), full)
 
     @tool
     def get_operation(operation: str, label: str | None = None, full: bool = True, expand: int = 0,
@@ -112,7 +112,7 @@ def build_server(specs: SpecSet, allow: list[Path] | None = None):
         or an operationId. `expand=1` adds the schemas of its request and response bodies (`errors=True`: error
         responses' too); `max_chars` leaves out the deepest of them, by name, beyond that size."""
         return answer(lambda: specs.get_operation(operation, label=label, expand=expand, errors=errors,
-                                                  max_chars=max_chars), full)
+                                                  max_chars=max_chars, full=full), full)
 
     @tool
     def find_field(name: str, label: str | None = None, full: bool = True) -> str:
@@ -155,6 +155,8 @@ def build_server(specs: SpecSet, allow: list[Path] | None = None):
         shown(text)  # not the whole diff: the model saw only these
         return text
 
+    described: dict = {}  # label -> (the spec checked, its description issues)
+
     @tool
     def validate(label: str | None = None, limit: int = 50) -> str:
         """Broken references and other problems in a spec, with file:line, and descriptions that state a limit the
@@ -163,7 +165,9 @@ def build_server(specs: SpecSet, allow: list[Path] | None = None):
             s = specs.get(label)
         except KeyError as e:
             raise ToolError(str(e).strip("'\"")) from e
-        issues = s.issues + description_issues(s)
+        if described.get(s.label, (None,))[0] is not s:  # checked once per loaded spec: it does not change
+            described[s.label] = (s, description_issues(s))
+        issues = s.issues + described[s.label][1]
         lines = [f"{s.label}: {len(s.errors)} errors, {len(issues) - len(s.errors)} warnings"]
         lines += [i.to_text() for i in issues[:limit]]
         if len(issues) > limit:
@@ -239,7 +243,10 @@ def main(argv=None) -> int:
     specs = SpecSet()
     for arg in args.specs:
         path, label = _parse(arg)
-        spec = specs.load(path, label)
+        try:
+            spec = specs.load(path, label)
+        except ValueError as e:  # a label not allowed, or given twice
+            parser.error(str(e))
         if not spec.ok:  # stdout is the protocol: anything for people goes to stderr
             print(f"{spec.label} has {len(spec.errors)} error(s); run `speclens validate`", file=sys.stderr)
     if not specs.specs and not args.allow:

@@ -18,11 +18,15 @@ METHODS = ("GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE")
 
 
 class NotFound(LookupError):
-    def __init__(self, what: str, name: str, suggestions=(), labels=()):
+    def __init__(self, what: str, name: str, suggestions=(), labels=(), also: "NotFound | None" = None):
+        """`also`: what else was looked for and not found either (`Nope.name`: no field, and no schema `Nope`)."""
         self.what, self.name, self.suggestions, self.labels = what, name, list(suggestions), list(labels)
-        message = f"no {what} named {name!r}"
+        self.also = also
+        message = f"no {what} named {name!r}" + (f", and no {also.what} named {also.name!r}" if also else "")
         if self.suggestions:
             message += f"; closest: {', '.join(self.suggestions)}"
+        if also and also.suggestions:
+            message += f"; closest {also.what}s: {', '.join(also.suggestions)}"
         if self.labels:
             message += f"; labels: {', '.join(self.labels)}"
         super().__init__(message)
@@ -331,12 +335,13 @@ def _with_expanded(text: str, expanded: list, omitted: list[str], full: bool) ->
     return "\n\n".join([text + f"\nreferenced schemas ({len(expanded)}):"] + [e.to_text(full) for e in expanded])
 
 
-def _fit(result, max_chars: int | None):
-    """Leave out expanded schemas, the deepest first, until the text fits in `max_chars`; their ids stay listed
-    on the result that held them. The result itself is always given whole."""
+def _fit(result, max_chars: int | None, full: bool = False):
+    """Leave out expanded schemas, the deepest first, until the text fits in `max_chars`, measured as it will be
+    given (`full`: descriptions whole); their ids stay listed on the result that held them. The result itself is
+    always given whole."""
     if max_chars is None:
         return result
-    while len(result.to_text()) > max_chars:
+    while len(result.to_text(full)) > max_chars:
         deepest, stack = None, [(result, 0)]
         while stack:  # the last of the deepest
             r, depth = stack.pop()
@@ -379,10 +384,10 @@ def _expand(spec, targets: list[str], expand: int, skip: set[str]) -> list["Sche
 
 
 def get_schema(spec, name: str, expand: int = 0, max_chars: int | None = None,
-               _seen: set[str] | None = None) -> SchemaResult:
+               _seen: set[str] | None = None, *, full: bool = False) -> SchemaResult:
     """`expand=1` also gives the named schemas its fields and options hold, each as a result of its own;
     `expand=2` theirs too. Each schema is given once. `max_chars` caps the text: expanded schemas are left out,
-    the deepest first, and listed by name."""
+    the deepest first, and listed by name, measured on the text as given: `to_text(full)`."""
     graph, index = spec.graph, spec.index
     node = _one(spec, g.SCHEMA, name, "schema")
     discriminator, options = None, []
@@ -406,7 +411,7 @@ def get_schema(spec, name: str, expand: int = 0, max_chars: int | None = None,
                              used_by=used, expanded=expanded, enum=enum_values(graph, node),
                              discriminator_mapping=node.data.get("discriminator"),
                              extended_by=sorted({e.source for e in graph.incoming(node.id, g.INHERITS)
-                                                 if e.data.get("via") == "allOf"})), max_chars)
+                                                 if e.data.get("via") == "allOf"})), max_chars, full)
 
 
 # ---- get_operation ------------------------------------------------------------------------------
@@ -509,7 +514,7 @@ class OperationResult(Result):
 
 
 def get_operation(spec, method: str, path: str | None = None, expand: int = 0, errors: bool = False,
-                  max_chars: int | None = None) -> OperationResult:
+                  max_chars: int | None = None, *, full: bool = False) -> OperationResult:
     """`get_operation(spec, "GET", "/pets/{id}")`, or one string: `"GET /pets/{id}"`, an operationId, an id.
     `expand=1` also gives the named schemas of its request body and of its responses other than errors (4xx,
     5xx, default), each as a result of its own; `errors=True` those of errors too. `max_chars` caps the text as
@@ -561,7 +566,7 @@ def get_operation(spec, method: str, path: str | None = None, expand: int = 0, e
                            security=None if d.get("security") is None else
                            [{name: {"type": graph.security_schemes.get(name, {}).get("type", "undefined"),
                                     "scopes": scopes} for name, scopes in way.items()} for way in d["security"]]),
-                max_chars)
+                max_chars, full)
 
 
 # ---- find_field ---------------------------------------------------------------------------------
@@ -593,7 +598,7 @@ class FieldResult(Result):
         n = len(self.definitions)
         lines = [f"field {self.name}: written in {n} place{'s' * (n != 1)}"]
         for d in self.definitions:
-            owner = d.id.split("/", 1)[1].rsplit(".", 1)[0]
+            owner = d.id.split("/", 1)[1].removesuffix("." + d.name)  # a field's own name may hold dots
             lines.append(f"  in {owner}: {d.type} {_cite(d.id, d.where)}" + (f" — {_cut(d.description, ROW_LIMIT, full)}"
                                                                                 if d.description else ""))
         lines.append(f"held by {len(self.holders)} schema{'s' * (len(self.holders) != 1)}:")
@@ -626,14 +631,24 @@ def find_field(spec, name: str) -> FieldResult:
     `name` is a field name (`weight`) or a schema and a field (`Dog.weight`, which follows inheritance)."""
     graph, index = spec.graph, spec.index
     ids = graph.resolve(name) or graph.resolve(f"{spec.label}:{g.FIELD}/{name}")
+    missed, schema_found = None, False  # `Nope.name`: the schema before the last dot, not found either
     if not ids and "." in name:
-        schema_name, field_name = name.rsplit(".", 1)
-        schema = _one(spec, g.SCHEMA, schema_name, "schema")
-        ids = graph.resolve(f"{spec.label}:{g.FIELD}/{schema.name}.{field_name}")
+        # A schema and its field; a field's own name may hold dots too (`user.name`), and so may a schema's: each
+        # place a dot splits them is tried, the last first. With no schema before any of them, it is a field name.
+        for at in [i for i, ch in enumerate(name) if ch == "."][::-1]:
+            try:
+                schema = _one(spec, g.SCHEMA, name[:at], "schema")
+            except NotFound as e:
+                missed = missed or e
+                continue
+            schema_found = True
+            ids = graph.resolve(f"{spec.label}:{g.FIELD}/{schema.name}.{name[at + 1:]}")
+            if ids:
+                break
     if not ids:
         ids, _ = index.fields.lookup(name)
     if not ids:
-        raise NotFound("field", name, index.fields.suggest(name))
+        raise NotFound("field", name, index.fields.suggest(name), also=None if schema_found else missed)
     definitions, holders, uses = [], {}, {}
     for fid in ids:
         f = graph.nodes[fid]

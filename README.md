@@ -87,7 +87,8 @@ whole. `get-schema` and `get-operation` take `--expand N` (`expand=N` from Pytho
 they refer to (a body's schema, the schemas fields hold, through arrays and options), each as a result of its
 own, N levels deep, each schema once. An operation's error responses (4xx, 5xx, default) are left out unless
 `--errors` (`errors=True`). `--max-chars N` keeps the text within N characters by leaving out expanded schemas,
-the deepest first; each is then listed by name. From Python:
+the deepest first; each is then listed by name. It is measured on the text as given: with `--full` (`full=True`,
+the MCP tools' default) descriptions are whole. From Python:
 
 ```python
 from speclens import load_spec
@@ -109,6 +110,11 @@ fields (12: 3 own, 9 inherited):
     ...
 used by 3 operations: GET /menu, GET /order-items, POST /menu
 ```
+
+Every id starts with the spec's label (`v1:` above). A label is letters, digits, `_`, `.`, `+` and `-`, starting and
+ending with a letter, digit or `_`, so versions such as `1.0.0-rc.1` and `1.0.0+build5` fit; others are refused with a message saying so. Without one, the
+label is `info.version` as written, so `version: 1.10` is `1.10`, not the number 1.1, with any other characters
+made `-` (`2.0 beta` is `2.0-beta`).
 
 Field and parameter rows say whether each is `required` or `optional` (a request body too): a model reading rows
 that say nothing for optional ones tends to take them all for required. They show the limits on the value as written, on it or on the schema it is through

@@ -18,7 +18,7 @@ import sys
 
 from .descriptions import description_issues
 from .query import Ambiguous, NotFound
-from .spec import SpecSet, load_spec
+from .spec import SpecSet, check_label, load_spec
 
 SHOWN_PER_CODE = 5
 
@@ -49,10 +49,10 @@ def validate(spec, args) -> int:
 
 QUERIES = {
     "get-schema": (["name"], "every field of a schema, inherited ones with their source",
-                   lambda s, a: s.get_schema(a.name, a.expand, a.max_chars)),
+                   lambda s, a: s.get_schema(a.name, a.expand, a.max_chars, full=a.full)),
     "get-operation": (["operation"], "parameters, request body and responses of an operation",
                       lambda s, a: s.get_operation(a.operation, expand=a.expand, errors=a.errors,
-                                                   max_chars=a.max_chars)),
+                                                   max_chars=a.max_chars, full=a.full)),
     "find-field": (["name"], "where a field is written, which schemas hold it, which operations use it",
                    lambda s, a: s.find_field(a.name)),
     "list-operations": ([], "every operation, one line each", lambda s, a: s.list_operations(a.filter)),
@@ -76,6 +76,10 @@ def query(spec, args) -> int:
 
 
 def two_specs(args) -> int:
+    if args.old_label is not None and args.old_label == args.new_label:
+        print(f"speclens: error: --old-label and --new-label are the same ({args.old_label!r}): give two different "
+              "labels", file=sys.stderr)
+        return 2
     old, new = load_spec(args.old, args.old_label), load_spec(args.new, args.new_label)
     if old.label == new.label:  # two releases with the same info.version, or none given
         old = load_spec(args.old, args.old_label or "old")
@@ -140,6 +144,12 @@ def main(argv=None) -> int:
         p.add_argument("--new-label", help="defaults to info.version, or 'new'")
         p.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args(argv)
+    for given in (getattr(args, k, None) for k in ("label", "old_label", "new_label")):
+        if given is not None:
+            try:
+                check_label(given)
+            except ValueError as e:
+                parser.error(str(e))
     if args.command in ("compare", "diff"):
         return two_specs(args)
     spec = load_spec(args.spec, args.label)

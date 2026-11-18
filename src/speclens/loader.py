@@ -47,9 +47,16 @@ def _core(text: str):
     return text
 
 
+# A value's properties as written before it: a tag, an anchor, or both in either order (`&a !!str 123`).
+_TAG = re.compile(r"(?:&\S+\s+)?!")
+_NON_SPECIFIC = re.compile(r"(?:&\S+\s+)?!(?=\s)")  # a bare `!`: the value is text, whatever it looks like
+
+
 def _scalar(node, text: str):
     # Plain (style None from the Python parser, "" from libyaml), and no tag written before it.
-    tagged = text[node.start_mark.index:node.start_mark.index + 1] == "!"
+    tagged = _TAG.match(text, node.start_mark.index) is not None
+    if tagged and _NON_SPECIFIC.match(text, node.start_mark.index):
+        return node.value
     if not node.style and not tagged and node.tag in _IMPLICIT:
         return _core(node.value)
     if node.tag == "tag:yaml.org,2002:str":
@@ -68,6 +75,7 @@ class Document:
     data: object = None
     lines: dict[str, tuple[int, int]] = field(default_factory=dict)  # pointer -> (first line, last line), 1-based
     parsed: str = field(default="", repr=False)  # the text the parser read; differs from `text` only if repaired
+    version_text: str | None = None  # `info.version` as written, for a label: `1.10` is not the number 1.1
     issues: list[Issue] = field(default_factory=list)
 
     def line_of(self, ptr: str) -> int | None:
@@ -121,8 +129,24 @@ def load(path: Path, name: str) -> Document:
         if refused:
             doc.issues.append(Issue(ERROR, "too-large", refused + "; the file is not read", name))
             return doc
+        doc.version_text = _info_version(node)
         doc.data, _ = _convert(node, "", doc, set())
     return doc
+
+
+def _info_version(root) -> str | None:
+    """The text of `info.version` as written (plain, quoted or a block), before it is read as a value."""
+    node = _under(_under(root, "info"), "version")
+    return node.value.strip() if isinstance(node, yaml.ScalarNode) else None
+
+
+def _under(node, key: str):
+    """The value node under `key` in a mapping node, or None."""
+    if isinstance(node, yaml.MappingNode):
+        for k, v in node.value:
+            if isinstance(k, yaml.ScalarNode) and k.value == key:
+                return v
+    return None
 
 
 MAX_DEPTH = 200  # values inside values; real specs stay far below this

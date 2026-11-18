@@ -1,4 +1,5 @@
-"""Comparing two specs: two versions of an API, or a branch and its main line. Labels are any names.
+"""Comparing two specs: two versions of an API, or a branch and its main line. Labels are any names made of
+letters, digits, `_`, `.`, `+` and `-` (see text.LABEL).
 
 Nodes are matched by name. A change is rated for the side it affects: removing a field breaks those who read
 it (responses), adding a required one breaks those who send it (requests). When a schema is compared on its
@@ -1304,13 +1305,20 @@ def compare(a, b, name: str) -> Comparison:
     raise NotFound("schema, operation or field", name, a.index.names.suggest(g.SCHEMA, name))
 
 
+def _held(spec, name: str) -> tuple[Node, Node] | None:
+    """(schema, field) for `Schema.field`. A field's own name may hold dots (`airline.leg.code`), and so may a
+    schema's (`Pet.v2`): each place a dot splits them is tried, the last first, as find_field does."""
+    for at in [i for i, ch in enumerate(name) if ch == "."][::-1]:
+        schema = _find(spec, g.SCHEMA, name[:at])
+        ids = spec.graph.resolve(f"{spec.label}:{g.FIELD}/{schema.name}.{name[at + 1:]}") if schema else []
+        if ids:
+            return schema, spec.graph.nodes[ids[0]]
+    return None
+
+
 def _field(spec, name: str) -> Node | None:
-    schema_name, field_name = name.rsplit(".", 1)
-    schema = _find(spec, g.SCHEMA, schema_name)
-    if schema is None:
-        return None
-    ids = spec.graph.resolve(f"{spec.label}:{g.FIELD}/{schema.name}.{field_name}")
-    return spec.graph.nodes[ids[0]] if ids else None
+    held = _held(spec, name)
+    return held[1] if held else None
 
 
 def _inherited_once(renames: list[dict], ga: Graph, schemas_a: dict, gb: Graph, schemas_b: dict) -> list[dict]:
@@ -1335,7 +1343,8 @@ def _inherited_once(renames: list[dict], ga: Graph, schemas_a: dict, gb: Graph, 
 
 def _field_edge(spec, name: str, field: Node):
     """The edge by which the schema `name` names holds this field."""
-    schema = _find(spec, g.SCHEMA, name.rsplit(".", 1)[0])
+    held = _held(spec, name)
+    schema = held[0] if held else None
     return next((e for e in spec.graph.outgoing(schema.id, g.HAS_FIELD) if e.target == field.id), None) \
         if schema else None
 
