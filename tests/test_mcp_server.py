@@ -231,3 +231,35 @@ def test_get_operation_with_expand_and_the_schemas_are_evidence(pets):
         ("verify", {"answer": "The Pet schema has 3 fields."}))
     assert not error and "referenced schemas (1):" in text and "\nschema Pet [1.2:schema/Pet" in text
     assert "1 counts: no findings" in verdict
+
+
+def test_max_chars_is_measured_on_the_text_returned(write):
+    long = "word " * 120  # a description the default text would cut
+    spec = dedent(f"""\
+        openapi: 3.1.0
+        info: {{title: t, version: '1'}}
+        paths:
+          /a:
+            get:
+              responses:
+                '200':
+                  description: ok
+                  content: {{application/json: {{schema: {{$ref: '#/components/schemas/A'}}}}}}
+        components:
+          schemas:
+            A: {{type: object, description: {long}, properties: {{b: {{$ref: '#/components/schemas/B'}}}}}}
+            B: {{type: object, description: {long}, properties: {{c: {{$ref: '#/components/schemas/C'}}}}}}
+            C: {{type: object, description: {long}, properties: {{n: {{type: string, description: {long}}}}}}}
+        """)
+    root = write({"openapi.yaml": spec})
+    specs = SpecSet()
+    specs.load(root / "openapi.yaml", "v1")
+    whole = len(specs.get_schema("A", expand=1).to_text(True))  # A and B, in full
+    whole += 100  # room for the line naming what is left out
+    op = len(specs.get_operation("GET /a", expand=1).to_text(True)) + 100  # the operation and A, in full
+    out = call(build_server(specs), ("get_schema", {"name": "A", "expand": 2, "max_chars": whole}),
+               ("get_operation", {"operation": "GET /a", "expand": 2, "max_chars": op}),
+               ("get_schema", {"name": "A", "expand": 2, "max_chars": whole, "full": False}))
+    assert len(out[0][0]) <= whole and "referenced, not shown (over max_chars): C" in out[0][0]
+    assert len(out[1][0]) <= op and "referenced, not shown (over max_chars): B" in out[1][0]
+    assert "not shown" not in out[2][0]  # cut text: all three fit

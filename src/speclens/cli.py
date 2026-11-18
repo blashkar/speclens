@@ -49,10 +49,10 @@ def validate(spec, args) -> int:
 
 QUERIES = {
     "get-schema": (["name"], "every field of a schema, inherited ones with their source",
-                   lambda s, a: s.get_schema(a.name, a.expand, a.max_chars)),
+                   lambda s, a: s.get_schema(a.name, a.expand, a.max_chars, full=a.full)),
     "get-operation": (["operation"], "parameters, request body and responses of an operation",
                       lambda s, a: s.get_operation(a.operation, expand=a.expand, errors=a.errors,
-                                                   max_chars=a.max_chars)),
+                                                   max_chars=a.max_chars, full=a.full)),
     "find-field": (["name"], "where a field is written, which schemas hold it, which operations use it",
                    lambda s, a: s.find_field(a.name)),
     "list-operations": ([], "every operation, one line each", lambda s, a: s.list_operations(a.filter)),

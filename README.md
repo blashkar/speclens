@@ -87,7 +87,8 @@ whole. `get-schema` and `get-operation` take `--expand N` (`expand=N` from Pytho
 they refer to (a body's schema, the schemas fields hold, through arrays and options), each as a result of its
 own, N levels deep, each schema once. An operation's error responses (4xx, 5xx, default) are left out unless
 `--errors` (`errors=True`). `--max-chars N` keeps the text within N characters by leaving out expanded schemas,
-the deepest first; each is then listed by name. From Python:
+the deepest first; each is then listed by name. It is measured on the text as given: with `--full` (`full=True`,
+the MCP tools' default) descriptions are whole. From Python:
 
 ```python
 from speclens import load_spec
