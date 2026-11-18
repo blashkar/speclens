@@ -482,12 +482,21 @@ class _Builder:
 
     # ---- operations --------------------------------------------------------------------------
 
+    def check_methods(self, item: dict, doc: Document, ptr: str):
+        """An operation under `query` in a spec older than 3.2, which has no such method: ignored, and said once."""
+        if "query" in item and "query" not in self.methods and (doc.name, ptr, "query") not in self.warned:
+            self.warned.add((doc.name, ptr, "query"))
+            self.issues.append(Issue(WARNING, "unsupported-keyword", f"`query` is an OpenAPI 3.2 operation; this "
+                                     f"spec is {self.version}, so it is ignored", doc.name,
+                                     self.line(doc, pointer.join(ptr, "query"))))
+
     def path_item(self, value, doc: Document, ptr: str, path: str):
         found = self.deref(value, doc, ptr)
         if found is None or not isinstance(found[0], dict):
             return
         item, item_doc, item_ptr = found
         self.path_items.setdefault((item_doc.name, item_ptr), set()).add(path)
+        self.check_methods(item, item_doc, item_ptr)
         shared = self.parameters(item.get("parameters"), item_doc, pointer.join(item_ptr, "parameters"), "path")
         for method in self.methods:
             op, op_doc, op_ptr = item.get(method), item_doc, pointer.join(item_ptr, method)
@@ -545,6 +554,7 @@ class _Builder:
                 if found is None or not isinstance(found[0], dict):
                     continue
                 item, i_doc, i_ptr = found
+                self.check_methods(item, i_doc, i_ptr)
                 for method in self.methods:
                     request = item.get(method)
                     if not isinstance(request, dict):
@@ -748,7 +758,8 @@ class _Builder:
 
     def check_version(self, root: Document) -> bool:
         version = str(root.data.get("openapi", ""))
-        minor = next((m for m in ("3.0", "3.1", "3.2") if version.startswith(m)), None)
+        # The minor version whole: 3.1.0 and 3.1 are 3.1, 3.10.0 is not.
+        minor = next((m for m in ("3.0", "3.1", "3.2") if version == m or version.startswith(m + ".")), None)
         if minor and self.version and minor != self.version:
             # 3.0 and 3.1 read schemas by different rules, and 3.2 has an operation 3.1 does not: one spec, one version.
             self.issues.append(Issue(ERROR, "version-mismatch", f"openapi {version} differs from the other root "
