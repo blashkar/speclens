@@ -199,6 +199,47 @@ def test_unsupported_versions_and_dialects(spec):
     assert s.ok
 
 
+def test_openapi_3_2_is_read_as_3_1_with_the_query_method(spec):
+    paths = """
+        paths:
+          /pets:
+            get:
+              responses: {'200': {description: ok}}
+            query:
+              operationId: findPets
+              requestBody:
+                content:
+                  application/json:
+                    schema: {$ref: '#/components/schemas/Filter'}
+              responses: {'200': {description: ok}}
+        components:
+          schemas:
+            Filter: {type: object, properties: {name: {type: string, examples: one}}}
+        """
+    s = spec({"openapi.yaml": "openapi: 3.2.0\ninfo: {title: t, version: '1'}\n" + dedent(paths)})
+    assert s.version == "3.2"
+    # Schemas follow 3.1's rules: `examples` must be an array.
+    assert codes(s) == ["invalid-keyword"]
+    assert sorted(n.id for n in s.graph.of_kind("operation")) == [
+        "v1:operation/GET /pets", "v1:operation/QUERY /pets"]
+    op = s.get_operation("QUERY /pets")
+    assert (op.id, op.method) == ("v1:operation/QUERY /pets", "QUERY")
+    assert "request body (optional): application/json: Filter [v1:schema/Filter]" in op.to_text()
+    assert [m.ids for m in s.names_in("What does QUERY /pets take?").mentions] == [["v1:operation/QUERY /pets"]]
+    # In 3.1, `query` in a path item is not an operation: it is ignored, and said once.
+    s = spec({"openapi.yaml": HEAD + dedent(paths)})
+    assert [n.id for n in s.graph.of_kind("operation")] == ["v1:operation/GET /pets"]
+    assert [(i.code, i.message, i.line) for i in s.issues if i.code != "invalid-keyword"] == [
+        ("unsupported-keyword", "`query` is an OpenAPI 3.2 operation; this spec is 3.1, so it is ignored", 8)]
+    # The minor version whole: 3.20 is not 3.2, nor 3.10 3.1.
+    for version in ("3.3.0", "3.20.0", "3.10.0", "3.2x"):
+        root = f"openapi: {version}\ninfo: {{title: t, version: '1'}}\npaths: {{}}\n"
+        assert codes(spec({"openapi.yaml": root})) == ["unsupported-version"], version
+    for version in ("3.2", "3.2.1"):
+        s = spec({"openapi.yaml": f"openapi: {version}\ninfo: {{title: t, version: '1'}}\npaths: {{}}\n"})
+        assert (s.version, codes(s)) == ("3.2", []), version
+
+
 def test_operation_kept_in_its_own_file_is_followed_and_reported(spec):
     # OpenAPI does not allow it, but specs split into many files often do this.
     s = spec({

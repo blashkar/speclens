@@ -19,6 +19,7 @@ from .loader import Document, load
 from .text import as_label
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
+METHODS_3_2 = METHODS + ("query",)  # OpenAPI 3.2 adds QUERY
 KNOWN_DIALECTS = {
     "https://spec.openapis.org/oas/3.1/dialect/base",
     "https://json-schema.org/draft/2020-12/schema",
@@ -57,6 +58,7 @@ class _Builder:
         self.docs: dict[Path, Document] = {}
         self.issues: list[Issue] = []
         self.version = None
+        self.methods = METHODS  # the path item keys that are operations
         self.pending: dict[tuple, dict] = {}  # (kind, ident) -> {"doc", "ptr", "data", "name"?}
         self.edges: list[tuple[str, tuple, tuple, dict]] = []
         self.queue = deque()
@@ -72,7 +74,7 @@ class _Builder:
         self.used_schemes: set[str] = set()  # the schemes some operation's requirement names
         self.path_items: dict[tuple[str, str], set[str]] = {}  # where a path item was written -> its paths
         self.op_locations: dict[tuple[str, str], set[str]] = {}  # an operation kept elsewhere -> its names
-        # JSON Schema 2020-12 identifiers (3.1 only): a base URI -> the schema resource it names, an anchor in a
+        # JSON Schema 2020-12 identifiers (3.1 and later): a base URI -> the schema resource it names, an anchor in a
         # resource -> where it is, a dynamic anchor's name -> every schema that has it.
         self.ids: dict[str, tuple[Document, str]] = {}
         self.bases: dict[tuple[str, str], str] = {}  # (file, pointer) of a schema with $id -> its base URI
@@ -213,7 +215,7 @@ class _Builder:
         return (target, base_ptr + fragment), None
 
     def index(self, doc: Document):
-        """Record the `$id`, `$anchor` and `$dynamicAnchor` of every schema in a file (3.1 only)."""
+        """Record the `$id`, `$anchor` and `$dynamicAnchor` of every schema in a file (3.1 and later)."""
         if doc.path in self.indexed:
             return
         self.indexed.add(doc.path)
@@ -462,12 +464,13 @@ class _Builder:
                 self.warned.add((doc.name, ptr, "2020-12"))
                 self.issues.append(Issue(WARNING, "unsupported-keyword", f"{', '.join(later)}: JSON Schema 2020-12, "
                                          "which OpenAPI 3.0 does not have; ignored", doc.name, self.line(doc, ptr)))
-        if self.version == "3.1" and "examples" in value and not isinstance(value["examples"], list):
+        if self.version != "3.0" and "examples" in value and not isinstance(value["examples"], list):
             ex_ptr = pointer.join(ptr, "examples")
             if (doc.name, ex_ptr) not in self.warned:
                 self.warned.add((doc.name, ex_ptr))
                 self.issues.append(Issue(WARNING, "invalid-keyword", "a schema's `examples` must be an array in "
-                                         "OpenAPI 3.1 (JSON Schema 2020-12); other tools may refuse this file",
+                                         "OpenAPI 3.1 and later (JSON Schema 2020-12); other tools may refuse "
+                                         "this file",
                                          doc.name, self.line(doc, ex_ptr)))
 
     def field(self, owner: tuple, name: str, value, doc: Document, ptr: str):
@@ -488,14 +491,23 @@ class _Builder:
 
     # ---- operations --------------------------------------------------------------------------
 
+    def check_methods(self, item: dict, doc: Document, ptr: str):
+        """An operation under `query` in a spec older than 3.2, which has no such method: ignored, and said once."""
+        if "query" in item and "query" not in self.methods and (doc.name, ptr, "query") not in self.warned:
+            self.warned.add((doc.name, ptr, "query"))
+            self.issues.append(Issue(WARNING, "unsupported-keyword", f"`query` is an OpenAPI 3.2 operation; this "
+                                     f"spec is {self.version}, so it is ignored", doc.name,
+                                     self.line(doc, pointer.join(ptr, "query"))))
+
     def path_item(self, value, doc: Document, ptr: str, path: str):
         found = self.deref(value, doc, ptr)
         if found is None or not isinstance(found[0], dict):
             return
         item, item_doc, item_ptr = found
         self.path_items.setdefault((item_doc.name, item_ptr), set()).add(path)
+        self.check_methods(item, item_doc, item_ptr)
         shared = self.parameters(item.get("parameters"), item_doc, pointer.join(item_ptr, "parameters"), "path")
-        for method in METHODS:
+        for method in self.methods:
             op, op_doc, op_ptr = item.get(method), item_doc, pointer.join(item_ptr, method)
             if isinstance(op, dict) and "$ref" in op:
                 # Not allowed by OpenAPI, but common in specs split into files: follow it, and say so.
@@ -551,7 +563,8 @@ class _Builder:
                 if found is None or not isinstance(found[0], dict):
                     continue
                 item, i_doc, i_ptr = found
-                for method in METHODS:
+                self.check_methods(item, i_doc, i_ptr)
+                for method in self.methods:
                     request = item.get(method)
                     if not isinstance(request, dict):
                         continue
@@ -757,27 +770,29 @@ class _Builder:
 
     def check_version(self, root: Document) -> bool:
         version = str(root.data.get("openapi", ""))
-        minor = "3.0" if version.startswith("3.0") else "3.1" if version.startswith("3.1") else None
+        # The minor version whole: 3.1.0 and 3.1 are 3.1, 3.10.0 is not.
+        minor = next((m for m in ("3.0", "3.1", "3.2") if version == m or version.startswith(m + ".")), None)
         if minor and self.version and minor != self.version:
-            # 3.0 and 3.1 read schemas by different rules, so one spec cannot hold both.
+            # 3.0 and 3.1 read schemas by different rules, and 3.2 has an operation 3.1 does not: one spec, one version.
             self.issues.append(Issue(ERROR, "version-mismatch", f"openapi {version} differs from the other root "
                                      f"files ({self.version}); this file is ignored", root.name,
                                      self.line(root, "/openapi")))
             return False
-        if minor == "3.0":
-            self.version = "3.0"
-        elif minor == "3.1":
-            self.version = "3.1"
+        if minor is None:
+            found = f"openapi: {version}" if version else ("swagger: " + str(root.data["swagger"])
+                                                         if "swagger" in root.data else "no openapi field")
+            self.issues.append(Issue(ERROR, "unsupported-version",
+                                     f"only OpenAPI 3.0, 3.1 and 3.2 are supported ({found})", root.name, 1))
+            return False
+        self.version = minor
+        if minor == "3.2":
+            self.methods = METHODS_3_2
+        if minor != "3.0":
+            # 3.2 reads schemas as 3.1 does: JSON Schema 2020-12, with the same default dialect.
             dialect = root.data.get("jsonSchemaDialect")
             if dialect is not None and (not isinstance(dialect, str) or dialect not in KNOWN_DIALECTS):
                 self.issues.append(Issue(ERROR, "unknown-dialect", f"unknown schema dialect {dialect!r}",
                                          root.name, self.line(root, "/jsonSchemaDialect")))
-        else:
-            found = f"openapi: {version}" if version else ("swagger: " + str(root.data["swagger"])
-                                                         if "swagger" in root.data else "no openapi field")
-            self.issues.append(Issue(ERROR, "unsupported-version",
-                                     f"only OpenAPI 3.0 and 3.1 are supported ({found})", root.name, 1))
-            return False
         return True
 
     def drain(self):
@@ -1040,7 +1055,7 @@ class _Builder:
             paths = self.path_items.get((doc.name, prefixes[i]))
             if paths and len(paths) == 1 and ptr != prefixes[i]:
                 path = next(iter(paths))
-                if i < len(t) and t[i] in METHODS:
+                if i < len(t) and t[i] in self.methods:
                     base, i = f"{t[i].upper()} {path}", i + 1
                 else:
                     base = path
@@ -1057,7 +1072,7 @@ class _Builder:
             base, i = f"{t[1]}/{t[2]}", 3
         elif len(t) >= 2 and t[0] in ("paths", "webhooks"):
             path = t[1] if t[0] == "paths" else f"webhook:{t[1]}"
-            if len(t) >= 3 and t[2] in METHODS:
+            if len(t) >= 3 and t[2] in self.methods:
                 base, i = f"{t[2].upper()} {path}", 3
             else:
                 base, i = path, 2
@@ -1087,7 +1102,7 @@ class _Builder:
             elif tok == "allOf" and nxt is not None and i + 2 < len(t) and self.fold \
                     and (doc.name, pointer.join(ptr, tok, nxt)) in self.merged:
                 step = 2  # an inline allOf branch is part of the schema holding it
-            elif tok in METHODS and not out:
+            elif tok in self.methods and not out:
                 out.append("#" + tok)
             elif tok == "responses" and nxt is not None:
                 rest = t[i + 2:i + 4]

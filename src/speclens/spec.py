@@ -21,7 +21,7 @@ from .text import LABEL, as_label, label_key
 class Spec:
     label: str
     root: Path  # the root file, or the folder holding several
-    version: str | None  # "3.0" or "3.1"; None when the root is not a supported OpenAPI document
+    version: str | None  # "3.0", "3.1" or "3.2"; None when the root is not a supported OpenAPI document
     graph: Graph
     documents: dict[Path, Document]
     issues: list[Issue]
