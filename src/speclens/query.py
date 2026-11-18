@@ -425,9 +425,15 @@ class ParameterRow:
     enum: list | None = None  # every value, when it is an enum
 
 
+def media_label(data: dict) -> str | None:
+    """A body's media type, and for an OpenAPI 3.2 `itemSchema` that the schema is of each item."""
+    media_type = data.get("media_type")
+    return f"{media_type} (each item)" if data.get("item") and media_type else media_type
+
+
 @dataclass
 class BodyRow:
-    media_type: str | None
+    media_type: str | None  # with " (each item)" for an `itemSchema`
     schema: str  # node id
     type: str
     status: str | None = None  # for a response
@@ -529,14 +535,14 @@ def get_operation(spec, method: str, path: str | None = None, expand: int = 0, e
                                        required=bool(p.data.get("required")), where=p.where(),
                                        description=full_text(p.data.get("description")), flags=_flags(p.data),
                                        limits=limits(graph, p)))
-    request = [BodyRow(media_type=e.data.get("media_type"), schema=e.target,
+    request = [BodyRow(media_type=media_label(e.data), schema=e.target,
                        type=describe(graph, graph.nodes[e.target], 1), required=bool(e.data.get("required")))
                for e in graph.outgoing(node.id, g.ACCEPTS)]
     responses = []
     for e in graph.outgoing(node.id, g.RETURNS):
         target = graph.nodes[e.target]
         status = e.data.get("status", "")
-        body = BodyRow(media_type=e.data.get("media_type"), schema=e.target, type=describe(graph, target, 1),
+        body = BodyRow(media_type=media_label(e.data), schema=e.target, type=describe(graph, target, 1),
                        status=status, header=e.data.get("header"))
         if not body.header and status.startswith("2"):
             body.fields = field_rows(graph, target)
@@ -544,7 +550,7 @@ def get_operation(spec, method: str, path: str | None = None, expand: int = 0, e
     d = node.data
     callbacks = []
     for cb in d.get("callbacks", []):
-        sent = [{"media_type": e.data.get("media_type"), "schema": e.target,
+        sent = [{"media_type": media_label(e.data), "schema": e.target,
                  "type": describe(graph, graph.nodes[e.target], 1)}
                 for e in graph.outgoing(node.id, g.CALLBACK)
                 if e.data.get("callback") == cb["name"] and e.data.get("method") == cb["method"]]
@@ -880,10 +886,18 @@ def names_in(spec, text: str) -> Mentions:
     paths: dict[str, list[str]] = {}
     for (m, p), i in operations.items():
         paths.setdefault(p, []).append(i)
+    # Methods of OpenAPI 3.2's `additionalOperations` (`COPY`), known only from the spec, as written there.
+    extra = {m for m, _ in operations if m not in METHODS}
     for match in _PATH.finditer(text):
         method, path = match.group(1), trim_path(match.group(2))
+        start = match.start()
+        before = re.search(r"(?<!\S)(\S+)[ \t]+$", text[:start]) if extra and not method else None
+        if before and (before.group(1), path) in operations and before.group(1) in extra:
+            method, start = before.group(1), before.start(1)
         how = "path"
-        if method and (method.upper(), path) in operations:
+        if method in extra and (method, path) in operations:
+            ids = [operations[(method, path)]]
+        elif method and (method.upper(), path) in operations:
             ids = [operations[(method.upper(), path)]]
         else:
             ids = paths.get(path, [])
@@ -894,8 +908,8 @@ def names_in(spec, text: str) -> Mentions:
             if not ids and method:
                 ids, how = _loose_path(path, None, operations), "path (other method)"
         if ids:
-            written = match.group(0)[:len(match.group(0)) - (len(match.group(2)) - len(path))]
-            found.append((match.start(), match.start() + len(written), Mention(
+            written = text[start:match.end() - (len(match.group(2)) - len(path))]
+            found.append((start, start + len(written), Mention(
                 written.strip(), g.OPERATION, ids, how, strength="exact" if how == "path" else "phrase")))
     for match in _VERB_NOUN.finditer(text):  # "the get pets endpoint" -> GET /pets
         if any(s < match.end() and match.start() < e for s, e, _ in found):

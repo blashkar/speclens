@@ -43,7 +43,7 @@ LITERALS = {"example", "default", "enum", "const"}
 # Maps whose keys are names chosen by the spec's author, so a key there is never a keyword.
 NAME_MAPS = {"properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "schemas",
              "responses", "parameters", "requestBodies", "headers", "securitySchemes", "links", "callbacks",
-             "pathItems", "paths", "webhooks", "content", "encoding", "variables"}
+             "pathItems", "paths", "webhooks", "content", "encoding", "variables", "additionalOperations"}
 
 
 class _Builder:
@@ -483,12 +483,44 @@ class _Builder:
     # ---- operations --------------------------------------------------------------------------
 
     def check_methods(self, item: dict, doc: Document, ptr: str):
-        """An operation under `query` in a spec older than 3.2, which has no such method: ignored, and said once."""
-        if "query" in item and "query" not in self.methods and (doc.name, ptr, "query") not in self.warned:
-            self.warned.add((doc.name, ptr, "query"))
-            self.issues.append(Issue(WARNING, "unsupported-keyword", f"`query` is an OpenAPI 3.2 operation; this "
-                                     f"spec is {self.version}, so it is ignored", doc.name,
-                                     self.line(doc, pointer.join(ptr, "query"))))
+        """Operations under `query` or `additionalOperations` in a spec older than 3.2, which has neither:
+        ignored, and said once."""
+        for key, what in (("query", "an OpenAPI 3.2 operation"), ("additionalOperations", "OpenAPI 3.2")):
+            if key in item and self.version != "3.2" and (doc.name, ptr, key) not in self.warned:
+                self.warned.add((doc.name, ptr, key))
+                self.issues.append(Issue(WARNING, "unsupported-keyword", f"`{key}` is {what}; this spec is "
+                                         f"{self.version}, so it is ignored", doc.name,
+                                         self.line(doc, pointer.join(ptr, key))))
+
+    def operations(self, item: dict, doc: Document, ptr: str):
+        """(method, operation, pointer) of each operation in a path item: its fixed fields (`get`, ...), then in
+        3.2 `additionalOperations`, whose keys are methods as sent (`COPY`). A key that one of the fixed fields
+        names (`POST`) is not allowed there: it is ignored, and said."""
+        for method in self.methods:
+            if method in item:
+                yield method.upper(), item[method], pointer.join(ptr, method)
+        if self.version != "3.2":
+            return
+        extra = item.get("additionalOperations")
+        a_ptr = pointer.join(ptr, "additionalOperations")
+        if extra is not None and not isinstance(extra, dict):
+            self.warn_once(doc, a_ptr, f"`additionalOperations` should be a mapping, found {_kind_of(extra)}; ignored")
+            return
+        for method, op in _items(extra):
+            m_ptr = pointer.join(a_ptr, method)
+            if method.lower() in self.methods or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", method):
+                why = f"use `{method.lower()}`" if method.lower() in self.methods else "not a method name"
+                self.warn_once(doc, m_ptr, f"`additionalOperations` cannot hold {method!r} ({why}); ignored")
+                continue
+            yield method, op, m_ptr
+
+    def method_at(self, t: list[str], i: int):
+        """(method, the index after it) when the pointer tokens `t` name an operation at `i`, else None."""
+        if i < len(t) and t[i] in self.methods:
+            return t[i].upper(), i + 1
+        if self.version == "3.2" and i + 1 < len(t) and t[i] == "additionalOperations":
+            return t[i + 1], i + 2
+        return None
 
     def path_item(self, value, doc: Document, ptr: str, path: str):
         found = self.deref(value, doc, ptr)
@@ -498,8 +530,8 @@ class _Builder:
         self.path_items.setdefault((item_doc.name, item_ptr), set()).add(path)
         self.check_methods(item, item_doc, item_ptr)
         shared = self.parameters(item.get("parameters"), item_doc, pointer.join(item_ptr, "parameters"), "path")
-        for method in self.methods:
-            op, op_doc, op_ptr = item.get(method), item_doc, pointer.join(item_ptr, method)
+        for method, op, op_ptr in self.operations(item, item_doc, item_ptr):
+            op_doc = item_doc
             if isinstance(op, dict) and "$ref" in op:
                 # Not allowed by OpenAPI, but common in specs split into files: follow it, and say so.
                 self.issues.append(Issue(WARNING, "nonstandard-ref", "OpenAPI does not allow $ref for an "
@@ -511,10 +543,10 @@ class _Builder:
                 op, op_doc, op_ptr = found
             if not isinstance(op, dict):
                 continue
-            name = f"{method.upper()} {path}"
+            name = f"{method} {path}"
             if op_doc is not item_doc or not op_ptr.startswith(item_ptr):
                 self.op_locations.setdefault((op_doc.name, op_ptr), set()).add(name)
-            data = {"method": method.upper(), "path": path,
+            data = {"method": method, "path": path,
                     **self.copy(op, ("operationId", "summary", "description", "tags", "deprecated"), op_doc, op_ptr),
                     "responses": [str(k) for k in self.mapping(op, "responses", op_doc, op_ptr)]}
             # The operation's own `security`, else the root document's; absent when neither declares one.
@@ -555,25 +587,22 @@ class _Builder:
                     continue
                 item, i_doc, i_ptr = found
                 self.check_methods(item, i_doc, i_ptr)
-                for method in self.methods:
-                    request = item.get(method)
+                for method, request, r_ptr in self.operations(item, i_doc, i_ptr):
                     if not isinstance(request, dict):
                         continue
                     self.pending[op]["data"].setdefault("callbacks", []).append(
-                        {"name": name, "expression": expression, "method": method.upper(),
-                         **self.copy(request, ("summary", "description"), i_doc, pointer.join(i_ptr, method)),
-                         "responses": [str(k) for k in self.mapping(request, "responses", i_doc,
-                                                                    pointer.join(i_ptr, method))]})
-                    body_ptr = pointer.join(i_ptr, method, "requestBody")
+                        {"name": name, "expression": expression, "method": method,
+                         **self.copy(request, ("summary", "description"), i_doc, r_ptr),
+                         "responses": [str(k) for k in self.mapping(request, "responses", i_doc, r_ptr)]})
+                    body_ptr = pointer.join(r_ptr, "requestBody")
                     found = self.deref(request.get("requestBody"), i_doc, body_ptr)
                     if found is None or not isinstance(found[0], dict):
                         continue
                     body, b_doc, b_ptr = found
-                    for media_type, media, m_ptr in self.media(body.get("content"), b_doc,
-                                                               pointer.join(b_ptr, "content")):
-                        target = self.schema(media["schema"], b_doc, pointer.join(m_ptr, "schema"))
-                        self.edge(g.CALLBACK, op, target, callback=name, method=method.upper(),
-                                  media_type=media_type)
+                    for media_type, schema, s_ptr, how in self.media(body.get("content"), b_doc,
+                                                                     pointer.join(b_ptr, "content")):
+                        target = self.schema(schema, b_doc, s_ptr)
+                        self.edge(g.CALLBACK, op, target, callback=name, method=method, media_type=media_type, **how)
 
     def parameters(self, values, doc: Document, ptr: str, level: str) -> dict:
         """(in, name) -> (parameter node key, level), as OpenAPI identifies a parameter by both."""
@@ -606,27 +635,37 @@ class _Builder:
         if isinstance(schema, dict) and (self.refers(schema) or STRUCTURAL & set(schema)):
             s_ptr = pointer.join(ptr, "schema")
             self.edge(g.PARAM_TYPE, key, self.schema(schema, doc, s_ptr), ref=self.ref_at(schema, doc, s_ptr))
-        for media_type, media, m_ptr in self.media(value.get("content"), doc, pointer.join(ptr, "content")):
-            s_ptr = pointer.join(m_ptr, "schema")
-            self.edge(g.PARAM_TYPE, key, self.schema(media.get("schema"), doc, s_ptr), media_type=media_type)
+        for media_type, schema, s_ptr, how in self.media(value.get("content"), doc, pointer.join(ptr, "content")):
+            self.edge(g.PARAM_TYPE, key, self.schema(schema, doc, s_ptr), media_type=media_type, **how)
         return key
 
     def media(self, content, doc: Document, ptr: str):
+        """(media type, schema, its pointer, edge data) of each schema in a `content` map: `schema`, and in 3.2
+        `itemSchema`, the schema of each item of a sequential media type (`application/jsonl`), marked `item`."""
         for media_type, media in _items(content):
-            if isinstance(media, dict) and "schema" in media:
-                yield media_type, media, pointer.join(ptr, media_type)
+            if not isinstance(media, dict):
+                continue
+            m_ptr = pointer.join(ptr, media_type)
+            if "schema" in media:
+                yield media_type, media["schema"], pointer.join(m_ptr, "schema"), {}
+            if "itemSchema" in media and self.version == "3.2":
+                yield media_type, media["itemSchema"], pointer.join(m_ptr, "itemSchema"), {"item": True}
+            elif "itemSchema" in media and (doc.name, m_ptr, "itemSchema") not in self.warned:
+                self.warned.add((doc.name, m_ptr, "itemSchema"))
+                self.issues.append(Issue(WARNING, "unsupported-keyword", f"`itemSchema` is OpenAPI 3.2; this spec "
+                                         f"is {self.version}, so it is ignored", doc.name,
+                                         self.line(doc, pointer.join(m_ptr, "itemSchema"))))
 
     def request_body(self, op: tuple | None, value, doc: Document, ptr: str):
         found = self.deref(value, doc, ptr) if value is not None else None
         if found is None or not isinstance(found[0], dict):
             return
         body, doc, ptr = found
-        for media_type, media, m_ptr in self.media(body.get("content"), doc, pointer.join(ptr, "content")):
-            s_ptr = pointer.join(m_ptr, "schema")
-            target = self.schema(media["schema"], doc, s_ptr)
+        for media_type, schema, s_ptr, how in self.media(body.get("content"), doc, pointer.join(ptr, "content")):
+            target = self.schema(schema, doc, s_ptr)
             if op is not None:
                 self.edge(g.ACCEPTS, op, target, media_type=media_type, required=bool(body.get("required")),
-                          ref=self.ref_at(media["schema"], doc, s_ptr))
+                          ref=self.ref_at(schema, doc, s_ptr), **how)
 
     def response(self, op: tuple | None, status: str, value, doc: Document, ptr: str):
         found = self.deref(value, doc, ptr)
@@ -640,12 +679,11 @@ class _Builder:
                     {"status": status, "name": name,
                      **self.copy(found[0], ("operationId", "operationRef", "parameters", "requestBody", "description"),
                                  found[1], found[2])})
-        for media_type, media, m_ptr in self.media(response.get("content"), doc, pointer.join(ptr, "content")):
-            s_ptr = pointer.join(m_ptr, "schema")
-            target = self.schema(media["schema"], doc, s_ptr)
+        for media_type, schema, s_ptr, how in self.media(response.get("content"), doc, pointer.join(ptr, "content")):
+            target = self.schema(schema, doc, s_ptr)
             if op is not None:
                 self.edge(g.RETURNS, op, target, status=status, media_type=media_type,
-                          ref=self.ref_at(media["schema"], doc, s_ptr))
+                          ref=self.ref_at(schema, doc, s_ptr), **how)
         for header, h_value in _items(response.get("headers")):
             h_found = self.deref(h_value, doc, pointer.join(ptr, "headers", header))
             if h_found is None or not isinstance(h_found[0], dict) or "schema" not in h_found[0]:
@@ -1043,8 +1081,9 @@ class _Builder:
             paths = self.path_items.get((doc.name, prefixes[i]))
             if paths and len(paths) == 1 and ptr != prefixes[i]:
                 path = next(iter(paths))
-                if i < len(t) and t[i] in self.methods:
-                    base, i = f"{t[i].upper()} {path}", i + 1
+                at = self.method_at(t, i)
+                if at:
+                    base, i = f"{at[0]} {path}", at[1]
                 else:
                     base = path
                 base_ptr = pointer.join("", *t[:i])
@@ -1060,8 +1099,9 @@ class _Builder:
             base, i = f"{t[1]}/{t[2]}", 3
         elif len(t) >= 2 and t[0] in ("paths", "webhooks"):
             path = t[1] if t[0] == "paths" else f"webhook:{t[1]}"
-            if len(t) >= 3 and t[2] in self.methods:
-                base, i = f"{t[2].upper()} {path}", 3
+            at = self.method_at(t, 2)
+            if at:
+                base, i = f"{at[0]} {path}", at[1]
             else:
                 base, i = path, 2
         elif len(t) >= 2 and (t[0] in ("$defs", "definitions") or t[0].startswith("x-")):
@@ -1092,6 +1132,9 @@ class _Builder:
                 step = 2  # an inline allOf branch is part of the schema holding it
             elif tok in self.methods and not out:
                 out.append("#" + tok)
+            elif tok == "additionalOperations" and nxt is not None and not out and self.version == "3.2":
+                out.append("#" + nxt)
+                step = 2
             elif tok == "responses" and nxt is not None:
                 rest = t[i + 2:i + 4]
                 if len(rest) == 2 and rest[0] in ("content", "headers"):
