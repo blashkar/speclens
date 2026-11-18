@@ -20,6 +20,7 @@ from .text import as_label
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 METHODS_3_2 = METHODS + ("query",)  # OpenAPI 3.2 adds QUERY
+_TEMPLATE = re.compile(r"\{([^{}/]+)\}")  # a path parameter written in a path: {petId}
 KNOWN_DIALECTS = {
     "https://spec.openapis.org/oas/3.1/dialect/base",
     "https://json-schema.org/draft/2020-12/schema",
@@ -531,6 +532,15 @@ class _Builder:
             return t[i + 1], i + 2
         return None
 
+    def check_template(self, path: str, doc: Document, ptr: str):
+        """`/users/{id}/friends/{id}`: a path parameter is one value, so a name written twice makes both places
+        the same value, which is seldom what was meant; said once for each name."""
+        names = _TEMPLATE.findall(path)
+        for name in dict.fromkeys(n for n in names if names.count(n) > 1):
+            self.issues.append(Issue(WARNING, "repeated-path-parameter", f"{{{name}}} is written "
+                                     f"{names.count(name)} times in {path}: one parameter is one value, so every "
+                                     "place it is written takes the same value", doc.name, self.line(doc, ptr)))
+
     def path_item(self, value, doc: Document, ptr: str, path: str):
         found = self.deref(value, doc, ptr)
         if found is None or not isinstance(found[0], dict):
@@ -772,6 +782,8 @@ class _Builder:
                                                      self.line(root, ptr)))
                         continue
                     seen[path] = where
+                    if section == "paths":
+                        self.check_template(name, root, ptr)
                     self.path_item(item, root, ptr, path)
         for name in sorted(set(self.security_schemes) - self.used_schemes):
             scheme = self.security_schemes[name]
