@@ -14,7 +14,7 @@ from . import graph as g
 from .graph import Graph, Node
 from .text import PATH, first_line, full_text, key, trim_path, variants, words
 
-METHODS = ("GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE")
+METHODS = ("GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE", "QUERY")
 
 
 class NotFound(LookupError):
@@ -784,7 +784,7 @@ class Mentions(Result):
         return "\n".join(f"{m.text!r} -> {m.kind} {', '.join(m.ids)} ({m.how})" for m in self.mentions)
 
 
-_PATH = re.compile(rf"(?:\b(GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE)\s+)?({PATH})", re.I)
+_PATH = re.compile(rf"(?:\b(GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE|(?-i:QUERY))\s+)?({PATH})", re.I)  # "query" in lower case is a word, not the method
 _TOKEN = re.compile(r"`([^`]+)`|([A-Za-z_][A-Za-z0-9_]*)")
 _NUMBER = re.compile(r"(?<![\w.])\d+(?![\w.])")
 

@@ -199,6 +199,40 @@ def test_unsupported_versions_and_dialects(spec):
     assert s.ok
 
 
+def test_openapi_3_2_is_read_as_3_1_with_the_query_method(spec):
+    paths = """
+        paths:
+          /pets:
+            get:
+              responses: {'200': {description: ok}}
+            query:
+              operationId: findPets
+              requestBody:
+                content:
+                  application/json:
+                    schema: {$ref: '#/components/schemas/Filter'}
+              responses: {'200': {description: ok}}
+        components:
+          schemas:
+            Filter: {type: object, properties: {name: {type: string, examples: one}}}
+        """
+    s = spec({"openapi.yaml": "openapi: 3.2.0\ninfo: {title: t, version: '1'}\n" + dedent(paths)})
+    assert s.version == "3.2"
+    # Schemas follow 3.1's rules: `examples` must be an array.
+    assert codes(s) == ["invalid-keyword"]
+    assert sorted(n.id for n in s.graph.of_kind("operation")) == [
+        "v1:operation/GET /pets", "v1:operation/QUERY /pets"]
+    op = s.get_operation("QUERY /pets")
+    assert (op.id, op.method) == ("v1:operation/QUERY /pets", "QUERY")
+    assert "request body (optional): application/json: Filter [v1:schema/Filter]" in op.to_text()
+    assert [m.ids for m in s.names_in("What does QUERY /pets take?").mentions] == [["v1:operation/QUERY /pets"]]
+    # In 3.1, `query` in a path item is not an operation.
+    s = spec({"openapi.yaml": HEAD + dedent(paths)})
+    assert [n.id for n in s.graph.of_kind("operation")] == ["v1:operation/GET /pets"]
+    assert codes(spec({"openapi.yaml": "openapi: 3.3.0\ninfo: {title: t, version: '1'}\n"})) == \
+        ["unsupported-version"]
+
+
 def test_operation_kept_in_its_own_file_is_followed_and_reported(spec):
     # OpenAPI does not allow it, but specs split into many files often do this.
     s = spec({

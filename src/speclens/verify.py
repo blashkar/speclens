@@ -42,7 +42,7 @@ _CODE = re.compile(r"`([^`\n]+)`")
 _PART = r"[$@]?[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*"  # pet_owner, petOwner, pet-owner, $id, @type
 _IDENT = re.compile(rf"{_PART}(?:\.{_PART})*")
 # An operation written as method and path: "DELETE /pets/{id}". Its path is one thing, not the names in it.
-_OPERATION = re.compile(rf"\b(GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE)\s+({PATH})")
+_OPERATION = re.compile(rf"\b(GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE|QUERY)\s+({PATH})")
 # A kind written before a name, as in an id: "schema:Pet", "(operation: GET /pets)". The kind is not a name.
 _KIND_PREFIX = re.compile(r"\b(?:operation|schema|field|parameter)\s*:(?!/)", re.I)
 
@@ -63,7 +63,7 @@ _CODE_LIKE = re.compile(r"^[a-z]{2,}[a-z0-9]*[A-Z]|[a-z0-9]_[a-z0-9]")
 _URL = re.compile(r"\b(?:https?|wss?)://\S+|\b[\w.+-]+@[\w-]+\.[\w.]+")
 _WORDS = re.compile(r"[A-Za-z0-9_]+")
 # Values that are part of how JSON and HTTP are written, not names a spec defines.
-_COMMON = {"true", "false", "null", "GET", "PUT", "POST", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE",
+_COMMON = {"true", "false", "null", "GET", "PUT", "POST", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE", "QUERY",
            "JSON", "YAML", "HTTP", "HTTPS", "URL", "URI", "API", "UUID", "ISO", "UTF", "OpenAPI", "allOf", "oneOf",
            "anyOf", "enum", "type", "string", "integer", "number", "boolean", "array", "object", "required",
            "nullable", "readOnly", "writeOnly", "deprecated", "format", "default", "properties", "items",
@@ -785,7 +785,7 @@ def _said(text: str) -> set[str]:
     for size in range(1, 5):
         for i in range(len(tokens) - size + 1):
             out.add(key(" ".join(tokens[i:i + size])))
-    for m in re.finditer(r"\b(GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE)\s+(/\S*)", text):
+    for m in re.finditer(r"\b(GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE|QUERY)\s+(/\S*)", text):
         out.add(f"{m.group(1)} {m.group(2).rstrip('.,;:)`')}")
     return out
 
@@ -889,7 +889,7 @@ def _required_subjects(clause: str) -> list[str]:
     """The names "required" or "optional" is said of: right before it ("`limit` is optional") or right after
     it ("a required `limit` parameter"), with only words like "is", "a", "parameter" between. Not the path of an
     operation named beside it."""
-    text = re.sub(r"\b(?:GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE)\s+/\S*|(?<![\w`])/[\w{}/.-]*", " ", clause)
+    text = re.sub(r"\b(?:GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE|QUERY)\s+/\S*|(?<![\w`])/[\w{}/.-]*", " ", clause)
     out = []
     code = [(m.start(), m.end(), _path_name(m.group(1))) for m in _CODE.finditer(text)]
     names = sorted(code + [(m.start(), m.end(), m.group(0)) for m in _IDENT.finditer(_CODE.sub(

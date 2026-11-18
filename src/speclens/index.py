@@ -88,7 +88,7 @@ class FieldIndex:
         return difflib.get_close_matches(name, list(self.by_name), n=limit, cutoff=0.6)
 
 
-_PATH = re.compile(r"(?:\b(get|put|post|delete|patch|head|options|trace)\s+)?(?<![\w}])(/[\w{}\-.~/]*)",
+_PATH = re.compile(r"(?:\b(get|put|post|delete|patch|head|options|trace|(?-i:QUERY))\s+)?(?<![\w}])(/[\w{}\-.~/]*)",
                    re.IGNORECASE)  # a path written out, with or without its method
 # "get widget by id", "delete a widget by its ID", "update widget by widgetId": one item of a collection
 _BY_ID = re.compile(r"\b(?:by|with|using)\s+(?:its\s+|the\s+|an?\s+|their\s+)?"

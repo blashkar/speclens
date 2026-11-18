@@ -170,6 +170,8 @@ def check(root) -> list[str]:
     spec = load_spec(root, "x")
     g = spec.graph
     v30 = spec.version == "3.0"
+    # OpenAPI 3.2 adds the QUERY method; read from the file, not from speclens.
+    methods = METHODS + (("query",) if str(_doc(root).get("openapi", "")).startswith("3.2") else ())
     problems = []
 
     def location(path, ptr):
@@ -181,7 +183,7 @@ def check(root) -> list[str]:
         if found:
             paths.append((p, *found))
 
-    want_ops = {f"{m.upper()} {p}" for p, _, _, item in paths for m in METHODS if isinstance(item.get(m), dict)}
+    want_ops = {f"{m.upper()} {p}" for p, _, _, item in paths for m in methods if isinstance(item.get(m), dict)}
     got_ops = {n.name for n in g.of_kind("operation") if not n.name.split(" ", 1)[1].startswith("webhook:")}
     if want_ops != got_ops:
         problems.append(f"operations: missing {sorted(want_ops - got_ops)[:5]}, extra {sorted(got_ops - want_ops)[:5]}")
@@ -198,7 +200,7 @@ def check(root) -> list[str]:
 
     responses = 0
     for p, ipath, iptr, item in paths:
-        for m in METHODS:
+        for m in methods:
             if not isinstance(item.get(m), dict):
                 continue
             opath, optr, op = _follow(ipath, f"{iptr}/{m}", item[m])
@@ -226,7 +228,7 @@ def check(root) -> list[str]:
     reached_by: dict[str, set] = {}
     for p, ipath, iptr, item in paths:
         shared = [(ipath, f"{iptr}/parameters/{i}", prm) for i, prm in enumerate(item.get("parameters") or [])]
-        for m in METHODS:
+        for m in methods:
             if not isinstance(item.get(m), dict):
                 continue
             opath, optr, op = _follow(ipath, f"{iptr}/{m}", item[m])

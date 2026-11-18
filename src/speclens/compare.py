@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, replace
 
 from . import graph as g
 from .graph import Graph, Node
-from .query import NotFound, Result, _one, describe
+from .query import METHODS, NotFound, Result, _one, describe
 from .text import key
 
 BREAKING, WARNING, INFO = "breaking", "warning", "info"
@@ -972,7 +972,7 @@ def compare(a, b, name: str) -> Comparison:
     inheritance). Something found in only one spec is reported as added or removed."""
     c = _Comparer(a, b)
     parts = name.split(None, 1)
-    if len(parts) == 2 and parts[0].upper() in ("GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"):
+    if len(parts) == 2 and parts[0].upper() in METHODS:
         op_name = f"{parts[0].upper()} {parts[1]}"
         oa, ob = _find(a, g.OPERATION, op_name, False), _find(b, g.OPERATION, op_name, False)
         if not oa and not ob:
