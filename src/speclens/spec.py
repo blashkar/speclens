@@ -201,11 +201,12 @@ class SpecSet:
     def find_field(self, name: str, label: str | None = None) -> query.FieldResult:
         return self.get(label).find_field(name)
 
-    def list_operations(self, label: str | None = None, filter: str | None = None) -> query.OperationList:
-        return self.get(label).list_operations(filter)
+    def list_operations(self, label: str | None = None, filter: str | None = None, method: str | None = None,
+                        tag: str | None = None) -> query.OperationList:
+        return self.get(label).list_operations(filter, method, tag)
 
-    def search(self, text: str, label: str | None = None, limit: int = 10) -> query.SearchResult:
-        return self.get(label).search(text, limit=limit)
+    def search(self, text: str, label: str | None = None, limit: int = 10, kinds=None) -> query.SearchResult:
+        return self.get(label).search(text, kinds, limit)
 
     def source(self, node_id: str) -> query.SourceResult:
         """The label is part of the id."""
