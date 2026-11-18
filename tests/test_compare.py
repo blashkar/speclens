@@ -1525,9 +1525,12 @@ def test_a_type_read_from_structure_is_compared_as_a_type(write):
                  ("{description: d}", "{type: integer, description: d}"),
                  ("{allOf: [{$ref: '#/components/schemas/Str'}, {$ref: '#/components/schemas/Code'}]}",
                   "{type: string}"),
-                 # `label` is not a JSON type: the schema is read from what else it says
-                 ("{type: object, properties: {a: {type: string}}}", "{type: label, properties: {a: {type: string}}}")):
+                 # `label` is not a JSON type: what the schema is read as comes from what else it says
+                 ("{allOf: [{$ref: '#/components/schemas/Item'}]}",
+                  "{allOf: [{$ref: '#/components/schemas/Item', type: label}]}")):
         assert not [c for c in changes(a, b) if c[0].startswith("type")], (a, b)
+    # but a `type` written on both sides is compared as written, JSON type or not
+    assert changes("{type: string}", "{type: label}") == [("type-changed", "string", "label", "breaking")]
     # allOf of two strings is a string, not an object
     assert changes("{allOf: [{$ref: '#/components/schemas/Str'}, {$ref: '#/components/schemas/Code'}]}",
                    "{type: integer}") == [("type-changed", "string", "integer", "breaking")]

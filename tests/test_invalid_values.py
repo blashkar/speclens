@@ -251,3 +251,26 @@ def test_null_is_a_value_where_any_value_is(write):
     text = s.compare("Pet", "a", "b").to_text()
     assert "breaking: const changed: b (null -> 5) [b:field/Pet.b]" in text
     assert 'info: default changed: a (null -> "x") [b:field/Pet.a]' in text
+
+
+def test_a_type_name_json_schema_does_not_have_is_a_warning(spec):
+    s = spec({"openapi.yaml": """
+        openapi: 3.1.0
+        info: {title: t, version: '1'}
+        paths: {}
+        components:
+          schemas:
+            Pet:
+              type: object
+              properties:
+                kind: {type: label}
+                code: {type: [integer, a, 'null', b]}
+                ok: {type: [string, 'null']}
+        """})
+    assert [(i.code, i.line, i.message) for i in s.issues] == [
+        ("invalid-value", 9, "`label` is not a JSON Schema type (string, number, integer, boolean, array, object, "
+                              "null)"),
+        ("invalid-value", 10, "`a`, `b` are not JSON Schema types (string, number, integer, boolean, array, object, "
+                              "null)")]
+    # Kept as written: shown and compared as what the spec says
+    assert {f.name: f.type for f in s.get_schema("Pet").fields}["kind"].startswith("label")

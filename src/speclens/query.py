@@ -128,14 +128,11 @@ def _scalar(data: dict) -> str:
     return text or "any"
 
 
-JSON_TYPES = frozenset({"string", "number", "integer", "boolean", "array", "object", "null"})
-
-
 def stated_types(data: dict) -> set:
     """The JSON Schema types a schema states, without null; a name that is not one of them is not a type."""
     t = data.get("type")
     out = set(t) if isinstance(t, list) else {t}
-    return {x for x in out if isinstance(x, str) and x in JSON_TYPES} - {"null"}
+    return {x for x in out if isinstance(x, str) and x in g.JSON_TYPES} - {"null"}
 
 
 def read_types(graph: Graph, node: Node, seen: frozenset = frozenset()) -> set:

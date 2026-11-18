@@ -123,6 +123,8 @@ class _Builder:
                 v = self.read(value[k], SHAPES[k], doc, pointer.join(ptr, k))
                 if v is not _BAD:
                     out[k] = v
+                if k == "type" and v is not _BAD:
+                    self.check_type_names(v, doc, pointer.join(ptr, k))
         return out
 
     def mapping(self, value: dict, k: str, doc: Document, ptr: str) -> dict:
@@ -148,6 +150,14 @@ class _Builder:
                 else _kind_of(value)
             self.warn_once(doc, ptr, f"`{key}` should be {wording}, found {found}; {what}")
         return out
+
+    def check_type_names(self, value, doc: Document, ptr: str):
+        """`type: label`: a name JSON Schema does not have. Kept as written, and compared as written, but said."""
+        names = [n for n in ([value] if isinstance(value, str) else value) if n not in g.JSON_TYPES]
+        if names:
+            said = ", ".join(f"`{n}`" for n in names)
+            what = "is not a JSON Schema type" if len(names) == 1 else "are not JSON Schema types"
+            self.warn_once(doc, ptr, f"{said} {what} ({', '.join(g.JSON_TYPES)})")
 
     def warn_once(self, doc: Document, ptr: str, message: str):
         if (doc.name, ptr, "shape") not in self.warned:

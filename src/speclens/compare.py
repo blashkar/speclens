@@ -20,7 +20,7 @@ from fractions import Fraction
 
 from . import graph as g
 from .graph import Graph, Node
-from .query import METHODS, NotFound, Result, _one, describe, media_label, read_types, stated_types
+from .query import METHODS, NotFound, Result, _one, describe, media_label, read_types
 from .text import json_text, key
 
 BREAKING, WARNING, INFO = "breaking", "warning", "info"
@@ -1000,8 +1000,11 @@ def _join(prefix: str, rest: str) -> str:
 
 
 def _types(data: dict) -> set:
-    """The stated types, without null (see _nullable)."""
-    return stated_types(data)
+    """The stated types as written, without null (see _nullable): a name that is not a JSON type is still
+    compared, so `string` -> `label` is a type change. What a schema is read as (read_types) knows only JSON's."""
+    t = data.get("type")
+    out = set(t) if isinstance(t, list) else ({t} if t else set())
+    return out - {"null"}
 
 
 def _nullable(data: dict) -> bool:

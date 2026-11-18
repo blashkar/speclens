@@ -28,6 +28,9 @@ CALLBACK = "callback"  # operation -> schema: the body of a request the API send
 PARAM_TYPE = "param_type"  # parameter -> schema
 
 
+# The types JSON Schema names: a `type` holding any other name is not one.
+JSON_TYPES = ("string", "number", "integer", "boolean", "array", "object", "null")
+
 @dataclass
 class Node:
     id: str
