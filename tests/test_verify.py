@@ -1119,3 +1119,23 @@ def test_formats_and_what_a_field_lacks_are_not_claims_that_it_is_absent(write):
     assert kinds(verify("`age` is an integer in 2.0. In 1.0 it is missing.", ev)) == [
         ("contradicted-claim", "In 1.0 it is missing.")]
     assert kinds(verify("`born` uses the `dateOfBirth` field.", ev)) == [("unknown-name", "dateOfBirth")]
+
+
+def test_a_renamed_path_parameter_is_checked_as_renamed(write):
+    op = """
+        paths:
+          /pets/{%s}:
+            get:
+              parameters: [{name: %s, in: path, required: true, schema: {type: string}}]
+              responses: {'200': {description: ok}}
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(op % ("id", "id")),
+                  "b/openapi.yaml": HEAD.replace("'1'", "'2'") + dedent(op % ("petId", "petId"))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "1.0")
+    s.load(root / "b/openapi.yaml", "2.0")
+    for ev in ([s.compare("GET /pets/{id}", "1.0", "2.0")], [s.diff("1.0", "2.0")]):
+        assert verify("In 2.0, the path parameter `id` of `GET /pets/{petId}` was renamed to `petId`.", ev).ok
+        assert verify("In 2.0, `GET /pets/{id}` is the same operation; its path parameter is now `petId`.", ev).ok
+        # The operation was not removed.
+        assert not verify("In 2.0, `GET /pets/{id}` was removed.", ev).ok
