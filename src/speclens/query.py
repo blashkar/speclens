@@ -291,7 +291,8 @@ class SchemaResult(Result):
             head += f", discriminator {json_text(self.discriminator)}):" if self.discriminator else "):"
             lines.append(head)
             for o in self.options:
-                values = f" when {self.discriminator} = " + " or ".join(json_text(v) for v in o.values) if o.values else ""
+                values = f" when {self.discriminator} = " + " or ".join(json_text(v) for v in o.values) \
+                    if o.values else ""
                 lines.append(f"  {o.type} [{o.id}]{values}")
         if self.discriminator_mapping and not self.options:
             m = self.discriminator_mapping

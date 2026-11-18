@@ -678,13 +678,13 @@ def _checked(answer: str, ev: "_Evidence", known=None, cover=()) -> Verification
             findings.append(Finding("unknown-citation", node_id, "this id is not in the evidence"))
 
     names = [n for n in _names(answer) if n not in _COMMON]
-    def known(word):  # a sentence may start with it capitalised, or not: SendSMS / sendSMS
+    def is_known(word):  # a sentence may start with it capitalised, or not: SendSMS / sendSMS
         return any(w in ev.words or w in known_words for w in (word, word[:1].swapcase() + word[1:])) \
             or word in _COMMON
 
     # `Pet*`: a family of names, known when the evidence has a name it begins
     families = set(re.findall(r"`([A-Za-z_][\w.]*)\*`", answer))
-    unknown = [n for n in names if not known(n) and not all(known(p) for p in n.split("."))
+    unknown = [n for n in names if not is_known(n) and not all(is_known(p) for p in n.split("."))
                and not (n in families and any(w.startswith(n) for w in ev.words))]
 
     claims, absent, previous, previous_in = 0, set(), [], []
@@ -698,7 +698,7 @@ def _checked(answer: str, ev: "_Evidence", known=None, cover=()) -> Verification
             # (an invented name, a chunk reference), which is reported as unknown already.
             named_here = [x for x in here if x not in ev.schemas]
             if named_here:
-                previous = [x for x in named_here if known(x)]
+                previous = [x for x in named_here if is_known(x)]
                 previous_in = list(dict.fromkeys(t for t in _IDENT.findall(clause) if t in ev.schemas))
             if not labels and len(in_sentence) == 1:
                 labels = in_sentence  # "In 1.2, Pet has no tag": the version is in another clause
