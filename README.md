@@ -189,8 +189,18 @@ spec = load_spec(["api/pets.yaml", "api/stores.yaml"])      # or just these
 In OpenAPI 3.1, references follow JSON Schema 2020-12: `$id` sets the base URI that references inside it are
 read against (URNs included), `$anchor` and `$dynamicAnchor` name a place to refer to, and a `$dynamicRef` that
 could land on several schemas keeps each as a condition, so their fields are never counted as all fields.
-References to other servers are reported, not fetched. OpenAPI 3.2 is read by the same rules, and its `query`
-operations are operations like any other (`QUERY /pets`); its other additions are not read yet.
+References to other servers are reported, not fetched.
+
+OpenAPI 3.2 is read by the same rules as 3.1. Of what 3.2 adds:
+
+- read: `query` operations (`QUERY /pets`); `additionalOperations`, whose methods are named as written (`COPY
+  /pets`); and `itemSchema`, the schema of each item of a stream, shown as `application/jsonl (each item)`;
+- read as before: an `in: querystring` parameter is listed like any other, with the schema in its `content`;
+- not used: `$self` (references are read against the file's own location), tags' `parent` and `kind`,
+  `prefixEncoding` and `itemEncoding`;
+- in a 3.0 or 3.1 spec, `query`, `additionalOperations` and `itemSchema` are ignored, with a warning;
+- `verify` checks claims about operations with the methods OpenAPI names (`QUERY` among them), not about
+  `additionalOperations` methods such as `COPY`.
 
 Specs from elsewhere: `load_spec(path, allow=[folder])` reads no file outside those folders, even one a `$ref`
 names (reported as `outside-allowed`). A file nested more than 200 levels deep, or whose YAML aliases repeat

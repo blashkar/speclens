@@ -1,8 +1,10 @@
-"""Resolving `$ref`: local, across files, circular, broken, and what OpenAPI 3.0 and 3.1 each allow."""
+"""Resolving `$ref`: local, across files, circular, broken, and what OpenAPI 3.0, 3.1 and 3.2 each allow."""
 
 from textwrap import dedent
 
 from conftest import codes
+
+from speclens import SpecSet
 
 HEAD = "openapi: 3.1.0\ninfo: {title: t, version: '1'}\n"
 HEAD_30 = "openapi: 3.0.3\ninfo: {title: t, version: '1'}\n"
@@ -238,6 +240,76 @@ def test_openapi_3_2_is_read_as_3_1_with_the_query_method(spec):
     for version in ("3.2", "3.2.1"):
         s = spec({"openapi.yaml": f"openapi: {version}\ninfo: {{title: t, version: '1'}}\npaths: {{}}\n"})
         assert (s.version, codes(s)) == ("3.2", []), version
+
+
+def test_openapi_3_2_additional_operations_and_item_schemas(spec, write):
+    paths = """
+        paths:
+          /pets/{id}:
+            parameters:
+              - {name: id, in: path, required: true, schema: {type: string}}
+            get:
+              responses: {'200': {description: ok}}
+            additionalOperations:
+              COPY:
+                operationId: copyPet
+                responses: {'201': {description: copied}}
+              purge: {responses: {'204': {description: gone}}}
+              POST: {responses: {'200': {description: ok}}}
+              not a method: {responses: {'200': {description: ok}}}
+          /events:
+            get:
+              responses:
+                '200':
+                  description: a stream
+                  content:
+                    application/jsonl:
+                      schema: {type: array, items: {$ref: '#/components/schemas/Event'}}
+                      itemSchema: {type: object, properties: {kind: {type: string%s}}}
+        components:
+          schemas:
+            Event: {type: object}
+        """
+    v32 = "openapi: 3.2.0\ninfo: {title: t, version: '1'}\n"
+    s = spec({"openapi.yaml": v32 + dedent(paths % "")})
+    # A method as sent (COPY) is an operation; one that a fixed field names (POST), or not a method, is not.
+    assert [(i.code, i.message) for i in s.issues] == [
+        ("invalid-value", "`additionalOperations` cannot hold 'POST' (use `post`); ignored"),
+        ("invalid-value", "`additionalOperations` cannot hold 'not a method' (not a method name); ignored")]
+    assert sorted(n.id for n in s.graph.of_kind("operation")) == [
+        "v1:operation/COPY /pets/{id}", "v1:operation/GET /events", "v1:operation/GET /pets/{id}",
+        "v1:operation/purge /pets/{id}"]
+    op = s.get_operation("COPY /pets/{id}")
+    assert (op.method, op.operation_id, [p.name for p in op.parameters]) == ("COPY", "copyPet", ["id"])
+    # A method OpenAPI names matches in any case; any other only as written.
+    assert [o.id for o in s.list_operations(method="COPY").operations] == ["v1:operation/COPY /pets/{id}"]
+    assert s.list_operations(method="copy").operations == []
+    assert [o.id for o in s.list_operations(method="purge").operations] == ["v1:operation/purge /pets/{id}"]
+    assert s.get_operation("purge", "/pets/{id}").id == "v1:operation/purge /pets/{id}"
+    assert [o.method for o in s.list_operations(method="get").operations] == ["GET", "GET"]
+    assert s.get_operation("COPY", "/pets/{id}").id == "v1:operation/COPY /pets/{id}"
+    assert [m.ids for m in s.names_in("What does COPY /pets/{id} return?").mentions] == [
+        ["v1:operation/COPY /pets/{id}"]]
+    # itemSchema is the schema of each item of a stream, beside the schema of the whole.
+    text = s.get_operation("GET /events").to_text()
+    assert "  200 application/jsonl: array of Event [v1:schema/GET /events#response/200/application/jsonl]" in text
+    assert "  200 application/jsonl (each item): object " \
+        "[v1:schema/GET /events#response/200/application/jsonl#itemSchema]" in text
+    root = write({"a/openapi.yaml": v32 + dedent(paths % ""),
+                  "b/openapi.yaml": v32 + dedent(paths % ", maxLength: 9").replace("copyPet", "clonePet")})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    assert [(c.kind, c.where) for c in s.compare("GET /events", "a", "b").changes] == [
+        ("constraint-tightened", "response 200 application/jsonl (each item): kind")]
+    assert [c.kind for c in s.compare("COPY /pets/{id}", "a", "b").changes] == ["operation-id-changed"]
+    # Before 3.2 neither exists: ignored, and said.
+    s = spec({"openapi.yaml": HEAD + dedent(paths % "")})
+    assert sorted(n.id for n in s.graph.of_kind("operation")) == ["v1:operation/GET /events",
+                                                                    "v1:operation/GET /pets/{id}"]
+    assert [i.message for i in s.issues] == [
+        "`additionalOperations` is OpenAPI 3.2; this spec is 3.1, so it is ignored",
+        "`itemSchema` is OpenAPI 3.2; this spec is 3.1, so it is ignored"]
 
 
 def test_operation_kept_in_its_own_file_is_followed_and_reported(spec):
