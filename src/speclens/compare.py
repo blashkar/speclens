@@ -21,7 +21,7 @@ from fractions import Fraction
 from . import graph as g
 from .graph import Graph, Node
 from .query import METHODS, NotFound, Result, _one, describe, media_label
-from .text import key
+from .text import json_text, key
 
 BREAKING, WARNING, INFO = "breaking", "warning", "info"
 _ORDER = {BREAKING: 0, WARNING: 1, INFO: 2}
@@ -345,12 +345,12 @@ class _Comparer:
         ea, eb = _allowed(da), _allowed(db)
         if "const" in da and "const" in db:
             if not _same_value(da["const"], db["const"]):
-                out.append(self.change("const-changed", where, da["const"], db["const"], side, a, b))
+                out.append(self.change("const-changed", where, json_text(da["const"]), json_text(db["const"]), side, a, b))
         elif isinstance(ea, list) and isinstance(eb, list):
             for v in [v for v in eb if not _among(v, ea)]:
-                out.append(self.change("enum-value-added", where, None, repr(v), side, a, b))
+                out.append(self.change("enum-value-added", where, None, json_text(v), side, a, b))
             for v in [v for v in ea if not _among(v, eb)]:
-                out.append(self.change("enum-value-removed", where, repr(v), None, side, a, b))
+                out.append(self.change("enum-value-removed", where, json_text(v), None, side, a, b))
         elif isinstance(eb, list) and ea is None:
             out.append(self.change("constraint-tightened", where, "any value", f"enum of {len(eb)}", side, a, b))
         elif isinstance(ea, list) and eb is None:
@@ -392,7 +392,7 @@ class _Comparer:
             kind = "pattern-added" if pa is None else "pattern-removed" if pb is None else "pattern-changed"
             out.append(self.change(kind, where, pa, pb, side, a, b))
         if "default" in da and "default" in db and not _same_value(da["default"], db["default"]):
-            out.append(self.change("default-changed", where, da["default"], db["default"], side, a, b))
+            out.append(self.change("default-changed", where, json_text(da["default"]), json_text(db["default"]), side, a, b))
         if bool(da.get("deprecated")) != bool(db.get("deprecated")):
             out.append(self.change("deprecated" if db.get("deprecated") else "undeprecated", where, None, None,
                                    side, a, b))

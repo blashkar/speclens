@@ -247,7 +247,7 @@ def test_null_is_a_value_where_any_value_is(write):
     s.load(root / "b/openapi.yaml", "b")
     assert s.get("a").issues == []
     b = s.get_schema("Pet", "a").fields[1]
-    assert (b.name, b.type) == ("b", "const None")
+    assert (b.name, b.type) == ("b", "const null")
     text = s.compare("Pet", "a", "b").to_text()
-    assert "breaking: const changed: b (none -> 5) [b:field/Pet.b]" in text
-    assert "info: default changed: a (none -> x) [b:field/Pet.a]" in text
+    assert "breaking: const changed: b (null -> 5) [b:field/Pet.b]" in text
+    assert 'info: default changed: a (null -> "x") [b:field/Pet.a]' in text
