@@ -1494,6 +1494,8 @@ def test_a_type_read_from_structure_is_compared_as_a_type(write):
         components:
           schemas:
             Item: {type: object, properties: {a: {type: string}}}
+            Str: {type: string, maxLength: 9}
+            Code: {type: string, pattern: '^[A-Z]+$'}
             X: {type: object, properties: {n: %s}}
         """
 
@@ -1520,5 +1522,12 @@ def test_a_type_read_from_structure_is_compared_as_a_type(write):
                  ("{items: {type: integer}}", "{type: array, items: {type: integer}}"),
                  ("{allOf: [{$ref: '#/components/schemas/Item'}]}", "{$ref: '#/components/schemas/Item'}"),
                  ("{oneOf: [{type: string}, {type: integer}]}", "{type: [string, integer]}"),
-                 ("{description: d}", "{type: integer, description: d}")):
+                 ("{description: d}", "{type: integer, description: d}"),
+                 ("{allOf: [{$ref: '#/components/schemas/Str'}, {$ref: '#/components/schemas/Code'}]}",
+                  "{type: string}"),
+                 # `label` is not a JSON type: the schema is read from what else it says
+                 ("{type: object, properties: {a: {type: string}}}", "{type: label, properties: {a: {type: string}}}")):
         assert not [c for c in changes(a, b) if c[0].startswith("type")], (a, b)
+    # allOf of two strings is a string, not an object
+    assert changes("{allOf: [{$ref: '#/components/schemas/Str'}, {$ref: '#/components/schemas/Code'}]}",
+                   "{type: integer}") == [("type-changed", "string", "integer", "breaking")]
