@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, replace
 
 from . import graph as g
 from .graph import Graph, Node
-from .query import METHODS, NotFound, Result, _one, describe
+from .query import METHODS, NotFound, Result, _one, describe, media_label
 from .text import key
 
 BREAKING, WARNING, INFO = "breaking", "warning", "info"
@@ -662,8 +662,8 @@ class _Comparer:
                     c = replace(c, kind="type-widened")
                 own(c, "request")
             request_roots += children
-        ra = {e.data.get("media_type"): e for e in ga.outgoing(oa.id, g.ACCEPTS)}
-        rb = {e.data.get("media_type"): e for e in gb.outgoing(ob.id, g.ACCEPTS)}
+        ra = {media_label(e.data): e for e in ga.outgoing(oa.id, g.ACCEPTS)}
+        rb = {media_label(e.data): e for e in gb.outgoing(ob.id, g.ACCEPTS)}
         if rb and not ra:
             required = any(e.data.get("required") for e in rb.values())
             own(self.change("required-request-body-added" if required else "request-body-added", "request body",
@@ -693,7 +693,7 @@ class _Comparer:
                 if e.data.get("header"):
                     headers[(e.data.get("status"), e.data["header"])] = e
                 else:
-                    bodies[(e.data.get("status"), e.data.get("media_type"))] = e
+                    bodies[(e.data.get("status"), media_label(e.data))] = e
             return bodies, headers, statuses
 
         ba, ha, sa = table(ga, oa)
@@ -972,8 +972,11 @@ def compare(a, b, name: str) -> Comparison:
     inheritance). Something found in only one spec is reported as added or removed."""
     c = _Comparer(a, b)
     parts = name.split(None, 1)
-    if len(parts) == 2 and parts[0].upper() in METHODS:
-        op_name = f"{parts[0].upper()} {parts[1]}"
+    # A method OpenAPI names, or one of 3.2's `additionalOperations` (`COPY /pets`), written as in the spec.
+    extra = len(parts) == 2 and parts[1].startswith("/") and parts[0].upper() not in METHODS and \
+        any(_find(s, g.OPERATION, name, False) for s in (a, b))
+    if len(parts) == 2 and (parts[0].upper() in METHODS or extra):
+        op_name = name if extra else f"{parts[0].upper()} {parts[1]}"
         oa, ob = _find(a, g.OPERATION, op_name, False), _find(b, g.OPERATION, op_name, False)
         if not oa and not ob:
             raise NotFound("operation", name, a.index.names.suggest(g.OPERATION, op_name))

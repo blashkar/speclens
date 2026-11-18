@@ -128,7 +128,24 @@ def _reach(path, ptr, value, v30, seen):
     return seen
 
 
-def _operation_schemas(opath, optr, op, shared):
+def _media(path, ptr, content, v32):
+    """(path, ptr, schema) of each schema in a `content` map: `schema`, and in 3.2 `itemSchema`."""
+    keys = ("schema", "itemSchema") if v32 else ("schema",)
+    return [(path, f"{ptr}/content/{_esc(mt)}/{k}", media[k]) for mt, media in (content or {}).items()
+            if isinstance(media, dict) for k in keys if k in media]
+
+
+def _operations(item, methods, v32):
+    """(method, pointer suffix, operation) of each operation in a path item; in 3.2 with `additionalOperations`."""
+    out = [(m.upper(), m, item[m]) for m in methods if isinstance(item.get(m), dict)]
+    extra = item.get("additionalOperations") if v32 else None
+    for m, op in (extra.items() if isinstance(extra, dict) else ()):
+        if isinstance(op, dict) and m.lower() not in methods and re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", m):
+            out.append((m, f"additionalOperations/{_esc(m)}", op))
+    return out
+
+
+def _operation_schemas(opath, optr, op, shared, v32=False):
     """(path, ptr, schema) for every schema an operation names directly: parameters, request, responses."""
     out = []
     params = list(shared) + [(opath, f"{optr}/parameters/{i}", p) for i, p in enumerate(op.get("parameters") or [])]
@@ -138,25 +155,19 @@ def _operation_schemas(opath, optr, op, shared):
             fpath, fptr, param = found
             if "schema" in param:
                 out.append((fpath, f"{fptr}/schema", param["schema"]))
-            for mt, media in (param.get("content") or {}).items():
-                if isinstance(media, dict) and "schema" in media:
-                    out.append((fpath, f"{fptr}/content/{_esc(mt)}/schema", media["schema"]))
+            out += _media(fpath, fptr, param.get("content"), v32)
     body = op.get("requestBody")
     if body is not None:
         found = _follow(opath, f"{optr}/requestBody", body)
         if found and isinstance(found[2], dict):
             bpath, bptr, body = found
-            for mt, media in (body.get("content") or {}).items():
-                if isinstance(media, dict) and "schema" in media:
-                    out.append((bpath, f"{bptr}/content/{_esc(mt)}/schema", media["schema"]))
+            out += _media(bpath, bptr, body.get("content"), v32)
     for status, response in (op.get("responses") or {}).items():
         found = _follow(opath, f"{optr}/responses/{_esc(status)}", response)
         if not found or not isinstance(found[2], dict):
             continue
         rpath, rptr, response = found
-        for mt, media in (response.get("content") or {}).items():
-            if isinstance(media, dict) and "schema" in media:
-                out.append((rpath, f"{rptr}/content/{_esc(mt)}/schema", media["schema"]))
+        out += _media(rpath, rptr, response.get("content"), v32)
         for name, header in (response.get("headers") or {}).items():
             found = _follow(rpath, f"{rptr}/headers/{_esc(name)}", header)
             if found and isinstance(found[2], dict) and "schema" in found[2]:
@@ -171,7 +182,9 @@ def check(root) -> list[str]:
     g = spec.graph
     v30 = spec.version == "3.0"
     # OpenAPI 3.2 adds the QUERY method; read from the file, not from speclens.
-    methods = METHODS + (("query",) if str(_doc(root).get("openapi", "")).startswith("3.2") else ())
+    version = str(_doc(root).get("openapi", ""))
+    v32 = version == "3.2" or version.startswith("3.2.")
+    methods = METHODS + (("query",) if v32 else ())
     problems = []
 
     def location(path, ptr):
@@ -183,7 +196,7 @@ def check(root) -> list[str]:
         if found:
             paths.append((p, *found))
 
-    want_ops = {f"{m.upper()} {p}" for p, _, _, item in paths for m in methods if isinstance(item.get(m), dict)}
+    want_ops = {f"{m} {p}" for p, _, _, item in paths for m, _, _ in _operations(item, methods, v32)}
     got_ops = {n.name for n in g.of_kind("operation") if not n.name.split(" ", 1)[1].startswith("webhook:")}
     if want_ops != got_ops:
         problems.append(f"operations: missing {sorted(want_ops - got_ops)[:5]}, extra {sorted(got_ops - want_ops)[:5]}")
@@ -200,12 +213,11 @@ def check(root) -> list[str]:
 
     responses = 0
     for p, ipath, iptr, item in paths:
-        for m in methods:
-            if not isinstance(item.get(m), dict):
-                continue
-            opath, optr, op = _follow(ipath, f"{iptr}/{m}", item[m])
+        for m, at, value in _operations(item, methods, v32):
+            opath, optr, op = _follow(ipath, f"{iptr}/{at}", value)
             got = {(e.data["status"], e.data["media_type"]): g.nodes[e.target].location
-                   for e in g.outgoing(f"x:operation/{m.upper()} {p}", "returns") if "media_type" in e.data}
+                   for e in g.outgoing(f"x:operation/{m} {p}", "returns")
+                   if "media_type" in e.data and not e.data.get("item")}
             for status, response in (op.get("responses") or {}).items():
                 found = _follow(opath, f"{optr}/responses/{_esc(status)}", response)
                 if not found:
@@ -228,15 +240,13 @@ def check(root) -> list[str]:
     reached_by: dict[str, set] = {}
     for p, ipath, iptr, item in paths:
         shared = [(ipath, f"{iptr}/parameters/{i}", prm) for i, prm in enumerate(item.get("parameters") or [])]
-        for m in methods:
-            if not isinstance(item.get(m), dict):
-                continue
-            opath, optr, op = _follow(ipath, f"{iptr}/{m}", item[m])
+        for m, at, value in _operations(item, methods, v32):
+            opath, optr, op = _follow(ipath, f"{iptr}/{at}", value)
             seen = set()
-            for spath, sptr, schema in _operation_schemas(opath, optr, op, shared):
+            for spath, sptr, schema in _operation_schemas(opath, optr, op, shared, v32):
                 _reach(spath, sptr, schema, v30, seen)
             for spath, sptr in seen:
-                reached_by.setdefault(location(spath, sptr), set()).add(f"x:operation/{m.upper()} {p}")
+                reached_by.setdefault(location(spath, sptr), set()).add(f"x:operation/{m} {p}")
     used = 0
     for node in g.of_kind("schema"):
         want = reached_by.get(node.location, set())
