@@ -16,6 +16,7 @@ from . import pointer
 from .graph import Edge, Graph, Node
 from .issues import ERROR, WARNING, Issue
 from .loader import Document, load
+from .text import as_label
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 KNOWN_DIALECTS = {
@@ -46,8 +47,9 @@ NAME_MAPS = {"properties", "patternProperties", "$defs", "definitions", "depende
 
 
 class _Builder:
-    def __init__(self, roots: list[Path], label: str, allow: list | None = None):
+    def __init__(self, roots: list[Path], label: str | None, allow: list | None = None, fallback: str = "spec"):
         self.label = label
+        self.fallback = fallback
         self.allow = [Path(a).resolve() for a in allow] if allow is not None else None
         self.roots = [r.resolve() for r in roots]
         # File names are relative to the folder holding every root, so they stay as written.
@@ -692,6 +694,9 @@ class _Builder:
                 roots.append(root)
                 continue
             self.walked_components.add(root.path)  # ignored: nothing in it is part of the spec
+        if self.label is None:
+            versions = {as_label(self.docs[r].version_text) for r in self.roots}
+            self.label = versions.pop() if len(versions) == 1 and None not in versions else self.fallback
         self.crawl(roots)
         for root in roots:  # the names a security requirement uses are those of its root document
             schemes = root.data.get("components")
@@ -1291,9 +1296,11 @@ def _widen(types: set) -> set:
     return types | ({"number"} if "integer" in types else set())
 
 
-def build(roots: list[Path], label: str, allow: list | None = None) \
+def build(roots: list[Path], label: str | None, allow: list | None = None, fallback: str = "spec") \
         -> tuple[Graph, dict[Path, Document], list[Issue], str | None]:
-    builder = _Builder(roots, label, allow)
+    """`label` None: the roots' `info.version` as written, made a label, when they all give the same one; else
+    `fallback`."""
+    builder = _Builder(roots, label, allow, fallback)
     graph = builder.run()
     issues = list(dict.fromkeys(builder.issues))  # the same problem reached two ways is one problem
     return graph, builder.docs, issues, builder.version

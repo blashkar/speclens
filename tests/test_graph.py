@@ -293,3 +293,37 @@ def test_what_a_parameter_says_about_itself_is_kept_over_its_inline_schema(spec)
     # What the parameter does not say, its schema says for it.
     sort = s.graph.nodes["v1:parameter/GET /pets#query/sort"].data
     assert (sort["description"], sort["deprecated"]) == ("the order", True)
+
+
+def test_a_label_is_letters_digits_dots_plus_and_minus(write, tmp_path):
+    root = write({"openapi.yaml": HEAD})
+    for good in ("1.0.0-rc.1", "1.0.0+build5", "2024_06", "版本2"):
+        assert load_spec(root / "openapi.yaml", good).label == good
+    for bad in ("2.0 beta", "a:b", "a/b", "", " v1", "v1 ", "v1(beta)", ".", "-x", "1.0.", "+"):
+        with pytest.raises(ValueError, match=r"letters, digits, '_', '\.', '\+' and '-' only"):
+            load_spec(root / "openapi.yaml", bad)
+
+
+def test_the_default_label_is_info_version_as_written(write):
+    head = "openapi: 3.1.0\ninfo:\n  title: t\n  version: %s\npaths: {}\n"
+    cases = {"1.10": "1.10", "'1.10'": "1.10", "|\n    1.10": "1.10", "2.0 beta": "2.0-beta",
+             "1.0.0+build5": "1.0.0+build5", "'v2 (preview)'": "v2-preview", "1e3": "1e3", "0x1F": "0x1F",
+             "v1.": "v1", "'-.+'": "openapi"}  # nothing left: the file's name
+    for i, (written, label) in enumerate(cases.items()):
+        folder = write({f"c{i}/openapi.yaml": head % written})
+        assert load_spec(folder / f"c{i}" / "openapi.yaml").label == label, written
+    folder = write({"j/openapi.json": '{"openapi": "3.1.0", "info": {"title": "t", "version": 1.10}, "paths": {}}'})
+    assert load_spec(folder / "j" / "openapi.json").label == "1.10"
+    from speclens.text import as_label
+    assert [as_label(t) for t in ("v1.", "+1.0-", "...", None)] == ["v1", "1.0", None, None]
+    folder = write({"my api/openapi.yaml": head % "'?'"})  # nothing usable in the version: the folder's name
+    assert load_spec(folder / "my api" / "openapi.yaml").label == "openapi"
+    assert load_spec(folder / "my api").label == "my-api"
+
+
+def test_the_cli_refuses_a_label_it_cannot_use_in_one_line(write, capsys):
+    from speclens.cli import main
+    root = write({"openapi.yaml": HEAD + "paths: {}\n"})
+    with pytest.raises(SystemExit) as e:
+        main(["validate", str(root / "openapi.yaml"), "--label", "2.0 beta"])
+    assert e.value.code == 2 and "a label is letters, digits" in capsys.readouterr().err

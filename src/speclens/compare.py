@@ -1,4 +1,5 @@
-"""Comparing two specs: two versions of an API, or a branch and its main line. Labels are any names.
+"""Comparing two specs: two versions of an API, or a branch and its main line. Labels are any names made of
+letters, digits, `_`, `.`, `+` and `-` (see text.LABEL).
 
 Nodes are matched by name. A change is rated for the side it affects: removing a field breaks those who read
 it (responses), adding a required one breaks those who send it (requests). When a schema is compared on its

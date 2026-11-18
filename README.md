@@ -111,6 +111,11 @@ fields (12: 3 own, 9 inherited):
 used by 3 operations: GET /menu, GET /order-items, POST /menu
 ```
 
+Every id starts with the spec's label (`v1:` above). A label is letters, digits, `_`, `.`, `+` and `-`, starting and
+ending with a letter, digit or `_`, so versions such as `1.0.0-rc.1` and `1.0.0+build5` fit; others are refused with a message saying so. Without one, the
+label is `info.version` as written, so `version: 1.10` is `1.10`, not the number 1.1, with any other characters
+made `-` (`2.0 beta` is `2.0-beta`).
+
 Field and parameter rows say whether each is `required` or `optional` (a request body too): a model reading rows
 that say nothing for optional ones tends to take them all for required. They show the limits on the value as written, on it or on the schema it is through
 `$ref` and `allOf` (`string, maxLength 3`; `limits` in JSON): `minLength`, `maxLength`, `minimum`,

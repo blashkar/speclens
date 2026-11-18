@@ -243,7 +243,10 @@ def main(argv=None) -> int:
     specs = SpecSet()
     for arg in args.specs:
         path, label = _parse(arg)
-        spec = specs.load(path, label)
+        try:
+            spec = specs.load(path, label)
+        except ValueError as e:  # a label not allowed, or given twice
+            parser.error(str(e))
         if not spec.ok:  # stdout is the protocol: anything for people goes to stderr
             print(f"{spec.label} has {len(spec.errors)} error(s); run `speclens validate`", file=sys.stderr)
     if not specs.specs and not args.allow:

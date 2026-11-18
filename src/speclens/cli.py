@@ -18,7 +18,7 @@ import sys
 
 from .descriptions import description_issues
 from .query import Ambiguous, NotFound
-from .spec import SpecSet, load_spec
+from .spec import SpecSet, check_label, load_spec
 
 SHOWN_PER_CODE = 5
 
@@ -140,6 +140,12 @@ def main(argv=None) -> int:
         p.add_argument("--new-label", help="defaults to info.version, or 'new'")
         p.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args(argv)
+    for given in (getattr(args, k, None) for k in ("label", "old_label", "new_label")):
+        if given is not None:
+            try:
+                check_label(given)
+            except ValueError as e:
+                parser.error(str(e))
     if args.command in ("compare", "diff"):
         return two_specs(args)
     spec = load_spec(args.spec, args.label)
