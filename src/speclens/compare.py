@@ -103,6 +103,7 @@ RULES = {
     "header-added": (INFO, INFO),
     "header-removed": (INFO, INFO),  # whether a response header was required is not recorded
     "operation-id-changed": (INFO, INFO),  # the same HTTP call; code generated from the spec is renamed
+    "path-parameter-renamed": (INFO, INFO),  # /pets/{id} -> /pets/{petId}: the same URL; generated code is renamed
     # A security requirement is a list of ways in, any one of which is enough.
     "anonymous-access-removed": (BREAKING, BREAKING),
     "anonymous-access-added": (INFO, INFO),
@@ -202,6 +203,11 @@ def _same_value(x, y) -> bool:
     if isinstance(x, list) and isinstance(y, list):
         return len(x) == len(y) and all(_same_value(a, b) for a, b in zip(x, y))
     return x == y
+
+
+def _among(value, values: list) -> bool:
+    """`value` is one of `values`, as JSON values."""
+    return any(_same_value(value, v) for v in values)
 
 
 def _show(v) -> str:
@@ -329,15 +335,16 @@ class _Comparer:
         if fa != fb:
             kind = "format-added" if fa is None else "format-removed" if fb is None else "format-changed"
             out.append(self.change(kind, where, fa, fb, side, a, b))
-        # `const: x` and `enum: [x]` allow the same one value: compared as the values each allows.
+        # `const: x` and `enum: [x]` allow the same one value: compared as the values each allows, as JSON values
+        # (`true` is not `1`).
         ea, eb = _allowed(da), _allowed(db)
         if "const" in da and "const" in db:
-            if da["const"] != db["const"]:
+            if not _same_value(da["const"], db["const"]):
                 out.append(self.change("const-changed", where, da["const"], db["const"], side, a, b))
         elif isinstance(ea, list) and isinstance(eb, list):
-            for v in [v for v in eb if v not in ea]:
+            for v in [v for v in eb if not _among(v, ea)]:
                 out.append(self.change("enum-value-added", where, None, repr(v), side, a, b))
-            for v in [v for v in ea if v not in eb]:
+            for v in [v for v in ea if not _among(v, eb)]:
                 out.append(self.change("enum-value-removed", where, repr(v), None, side, a, b))
         elif isinstance(eb, list) and ea is None:
             out.append(self.change("constraint-tightened", where, "any value", f"enum of {len(eb)}", side, a, b))
@@ -687,6 +694,20 @@ class _Comparer:
                             oa.id, ob.id), "request")
         pa = {(e.data["in"], e.data["name"]): ga.nodes[e.target] for e in ga.outgoing(oa.id, g.TAKES)}
         pb = {(e.data["in"], e.data["name"]): gb.nodes[e.target] for e in gb.outgoing(ob.id, g.TAKES)}
+        # The same operation with its path parameters named otherwise (/pets/{id} -> /pets/{petId}): which is
+        # which is their place in the path, not their names. Each renamed is said, and compared with the one
+        # declared in its place: every old one moves to its new name at once, so swapped names do not overwrite
+        # each other. One whose new name is not declared (the path renamed, the parameter not) stays by its name.
+        places = [(old, new) for old, new in zip(_path_parameters(oa.name), _path_parameters(ob.name)) if old != new]
+        if places:
+            moved = {("path", old): pa.pop(("path", old)) for old, new in places
+                     if ("path", old) in pa and ("path", new) in pb}
+            for old, new in places:
+                before, after = moved.get(("path", old)), pb.get(("path", new))
+                own(self.change("path-parameter-renamed", f"parameter path {new}", old, new, None,
+                                before.id if before else oa.id, after.id if after else ob.id), "request")
+                if before is not None:
+                    pa[("path", new)] = before
         for k in [k for k in pb if k not in pa]:
             kind = "required-parameter-added" if pb[k].data.get("required") else "parameter-added"
             own(self.change(kind, f"parameter {k[0]} {k[1]}", None, describe(gb, pb[k]), None, None, pb[k].id),
@@ -1047,6 +1068,27 @@ def _side(spec, node_id: str) -> str:
 
 # ---- the public functions -----------------------------------------------------------------------
 
+def _path_parameters(operation: str) -> list[str]:
+    """The names of an operation's path parameters, in order: GET /pets/{petId}/toys/{toyId} -> petId, toyId."""
+    return re.findall(r"{([^}/]*)}", operation)
+
+
+def _paired_operations(names_a, names_b) -> dict[str, str]:
+    """Each operation of `a` -> the one of `b` it is: the same name; else, among those left on both sides, the
+    only one on each side with the same method and path but for the names of its path parameters
+    (GET /pets/{id} -> GET /pets/{petId}). Where several are left with that shape, none is paired."""
+    out = {n: n for n in names_a if n in names_b}
+    shapes_a, shapes_b = {}, {}
+    for names, shapes in ((names_a, shapes_a), (names_b, shapes_b)):
+        for n in names:
+            if n not in out:
+                shapes.setdefault(re.sub(r"{[^}/]*}", "{}", n), []).append(n)
+    for shape, left in shapes_a.items():
+        if len(left) == 1 and len(shapes_b.get(shape, ())) == 1:
+            out[left[0]] = shapes_b[shape][0]
+    return out
+
+
 def _find(spec, kind: str, name: str, plain=True) -> Node | None:
     try:
         return _one(spec, kind, name, kind, plain=plain)
@@ -1066,6 +1108,14 @@ def compare(a, b, name: str) -> Comparison:
         oa, ob = _find(a, g.OPERATION, op_name, False), _find(b, g.OPERATION, op_name, False)
         if not oa and not ob:
             raise NotFound("operation", name, a.index.names.suggest(g.OPERATION, op_name))
+        if not oa or not ob:  # the same operation, its path parameters named otherwise
+            pairs = _paired_operations([n.name for n in a.graph.of_kind(g.OPERATION)],
+                                       [n.name for n in b.graph.of_kind(g.OPERATION)])
+            if ob:
+                oa = next((a.graph.nodes[f"{a.label}:{g.OPERATION}/{x}"] for x, y in pairs.items() if y == ob.name), None)
+            else:
+                ob = b.graph.nodes.get(f"{b.label}:{g.OPERATION}/{pairs.get(oa.name)}")
+            op_name = (ob or oa).name
         if not oa or not ob:
             kind = "operation-added" if ob else \
                 "deprecated-operation-removed" if oa.data.get("deprecated") else "operation-removed"
@@ -1262,11 +1312,12 @@ def diff(a, b) -> SpecDiff:
     c = _Comparer(a, b)
     ops_a = {n.name: n for n in a.graph.of_kind(g.OPERATION)}
     ops_b = {n.name: n for n in b.graph.of_kind(g.OPERATION)}
+    pairs = _paired_operations(ops_a, ops_b)
     changed = {}
-    for name in sorted(set(ops_a) & set(ops_b)):
-        changes = c.operations(ops_a[name], ops_b[name])
+    for old, new in sorted(pairs.items(), key=lambda p: p[1]):
+        changes = c.operations(ops_a[old], ops_b[new])
         if changes:
-            changed[name] = changes
+            changed[new] = changes  # by its name in the newer spec
     sch_a = {n.name: n for n in a.graph.of_kind(g.SCHEMA) if n.data.get("named")}
     sch_b = {n.name: n for n in b.graph.of_kind(g.SCHEMA) if n.data.get("named")}
     schemas_changed = {}
@@ -1274,13 +1325,13 @@ def diff(a, b) -> SpecDiff:
         changes = c.shallow(sch_a[name], sch_b[name], _side(b, sch_b[name].id))
         if changes:
             schemas_changed[name] = changes
-    removed = sorted(set(ops_a) - set(ops_b))
+    removed = sorted(set(ops_a) - set(pairs))
     schemas_removed, schemas_added = sorted(set(sch_a) - set(sch_b)), sorted(set(sch_b) - set(sch_a))
     renames = _renames(a.graph, b.graph, [sch_a[n] for n in schemas_removed], [sch_b[n] for n in schemas_added])
     field_renames = [{"schema": name, "from": gone.where, "to": new.where, "why": why}
                      for name, changes in schemas_changed.items() for gone, new, why in _field_renames(changes)]
     field_renames = _inherited_once(field_renames, a.graph, sch_a, b.graph, sch_b)
-    result = SpecDiff(a.label, b.label, sorted(set(ops_b) - set(ops_a)), removed, changed,
+    result = SpecDiff(a.label, b.label, sorted(set(ops_b) - set(pairs.values())), removed, changed,
                     [op for op in removed if ops_a[op].data.get("deprecated")],
                     schemas_added, schemas_removed, schemas_changed,
                     {old: {"to": new.name, "why": why} for old, (new, why) in renames.items()},

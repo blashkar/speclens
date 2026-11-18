@@ -235,7 +235,9 @@ access or a way in, or requiring another scope, breaks; adding a way in or dropp
 whose type or credential location changes breaks every operation that uses it. `get_operation` shows each
 operation's requirement, or "security: none declared" when the spec gives none. `validate` warns about a scheme
 a requirement names that is not defined, and about a scheme no requirement names. A renamed
-`operationId` is info: the HTTP call is the same, but code generated from the spec is renamed.
+`operationId` is info: the HTTP call is the same, but code generated from the spec is renamed. So is a renamed
+path parameter: `GET /pets/{id}` that became `GET /pets/{petId}` is the same operation, compared under its newer
+name (and found by either), when it is the only one of that shape left on each side.
 
 `validate` also warns (`description-contradicts-schema`) about a description that states a limit the schema
 contradicts: "The name must not exceed 100 characters." on a schema whose `name` has `maxLength: 120`, or "a
@@ -244,6 +246,12 @@ description is read with its field names as names; only descriptions with a digi
 are checked: "Required" in prose is most often a condition ("required for mobile integrations"). On 281 public
 specs it found 11, each a range in prose narrower than the schema's; a limit said under a condition ("if the
 review recurs weekly, ... cannot exceed 7") is not one.
+
+A value of the wrong JSON type, such as `required: true` on a schema or `type: {}`, is a warning
+(`invalid-value`) at its line, and the value is left out; the rest of the spec is read as usual. A value written
+as the wrong kind of scalar is read as what it says, with the same warning: `required: "true"` as true,
+`maxLength: "40"` as 40, `summary: 2020` as text. A key left empty is absent, without a warning, except `type`:
+an empty `type` is not the null type, which is written `'null'`.
 
 `diff --breaking` is there for quick checks; to gate releases, use oasdiff, which has far more checks
 (sunset dates, extensions and more) and configuration. What `compare` adds is answers about one thing,
