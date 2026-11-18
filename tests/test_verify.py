@@ -499,6 +499,10 @@ def test_required_or_optional_claims_against_the_evidence(pets):
     assert verify("`name` is required.", schemas).ok  # true in one version, not the other: not checked
     assert verify("`Pet.id` is required, and `name` is optional in 1.10.", schemas).ok
     assert kinds(verify("`Pet.id` is optional.", schemas)) == [("contradicted-claim", "`Pet.id` is optional.")]
+    # The field named with where it is: "`id` in Pet", "the `id` field of Pet" are said of Pet.id, not of Pet.
+    for claim in ("`id` in Pet is optional.", "The `id` field of Pet is optional.", "`id` on Pet is optional."):
+        assert kinds(verify(claim, schemas)) == [("contradicted-claim", claim)], claim
+    assert verify("`id` in Pet is required, and the `name` field of Pet is optional in 1.10.", schemas).ok
     op = [pets.get_operation("GET /pets", label="1.10")]
     assert kinds(verify("`limit` is a required parameter.", op)) == [
         ("contradicted-claim", "`limit` is a required parameter.")]
