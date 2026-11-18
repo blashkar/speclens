@@ -425,6 +425,12 @@ class ParameterRow:
     enum: list | None = None  # every value, when it is an enum
 
 
+def method_name(method: str) -> str:
+    """A method as an operation's name has it: one OpenAPI names (`get`, `query`) in capitals, any other (an
+    OpenAPI 3.2 `additionalOperations` key such as `COPY` or `purge`) exactly as written."""
+    return method.upper() if method.upper() in METHODS else method
+
+
 def media_label(data: dict) -> str | None:
     """A body's media type, and for an OpenAPI 3.2 `itemSchema` that the schema is of each item."""
     media_type = data.get("media_type")
@@ -521,7 +527,7 @@ def get_operation(spec, method: str, path: str | None = None, expand: int = 0, e
     5xx, default), each as a result of its own; `errors=True` those of errors too. `max_chars` caps the text as
     for get_schema."""
     graph = spec.graph
-    name = f"{method.upper()} {path}" if path is not None else method
+    name = f"{method_name(method)} {path}" if path is not None else method
     if path is None:
         parts = method.split(None, 1)
         if len(parts) == 2 and parts[0].upper() in METHODS:
@@ -690,7 +696,7 @@ def list_operations(spec, filter: str | None = None, method: str | None = None, 
     rows = []
     for node in spec.graph.of_kind(g.OPERATION):
         d = node.data
-        if method and d["method"] != method.upper():
+        if method and d["method"] != method_name(method):
             continue
         if tag and tag not in (d.get("tags") or []):
             continue

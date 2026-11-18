@@ -254,6 +254,7 @@ def test_openapi_3_2_additional_operations_and_item_schemas(spec, write):
               COPY:
                 operationId: copyPet
                 responses: {'201': {description: copied}}
+              purge: {responses: {'204': {description: gone}}}
               POST: {responses: {'200': {description: ok}}}
               not a method: {responses: {'200': {description: ok}}}
           /events:
@@ -276,9 +277,17 @@ def test_openapi_3_2_additional_operations_and_item_schemas(spec, write):
         ("invalid-value", "`additionalOperations` cannot hold 'POST' (use `post`); ignored"),
         ("invalid-value", "`additionalOperations` cannot hold 'not a method' (not a method name); ignored")]
     assert sorted(n.id for n in s.graph.of_kind("operation")) == [
-        "v1:operation/COPY /pets/{id}", "v1:operation/GET /events", "v1:operation/GET /pets/{id}"]
+        "v1:operation/COPY /pets/{id}", "v1:operation/GET /events", "v1:operation/GET /pets/{id}",
+        "v1:operation/purge /pets/{id}"]
     op = s.get_operation("COPY /pets/{id}")
     assert (op.method, op.operation_id, [p.name for p in op.parameters]) == ("COPY", "copyPet", ["id"])
+    # A method OpenAPI names matches in any case; any other only as written.
+    assert [o.id for o in s.list_operations(method="COPY").operations] == ["v1:operation/COPY /pets/{id}"]
+    assert s.list_operations(method="copy").operations == []
+    assert [o.id for o in s.list_operations(method="purge").operations] == ["v1:operation/purge /pets/{id}"]
+    assert s.get_operation("purge", "/pets/{id}").id == "v1:operation/purge /pets/{id}"
+    assert [o.method for o in s.list_operations(method="get").operations] == ["GET", "GET"]
+    assert s.get_operation("COPY", "/pets/{id}").id == "v1:operation/COPY /pets/{id}"
     assert [m.ids for m in s.names_in("What does COPY /pets/{id} return?").mentions] == [
         ["v1:operation/COPY /pets/{id}"]]
     # itemSchema is the schema of each item of a stream, beside the schema of the whole.
