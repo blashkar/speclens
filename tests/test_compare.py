@@ -1038,6 +1038,15 @@ def test_a_schema_kept_under_an_extension_key_is_named_like_a_component(write):
         ("description-changed", "response 200 application/json: dims")]
 
 
+def test_the_cli_refuses_two_equal_labels(write, capsys):
+    root = write({"old/openapi.yaml": OLD, "new/openapi.yaml": NEW})
+    old, new = str(root / "old/openapi.yaml"), str(root / "new/openapi.yaml")
+    assert main(["diff", old, new, "--old-label", "x", "--new-label", "x"]) == 2
+    assert capsys.readouterr().err == ("speclens: error: --old-label and --new-label are the same ('x'): give two "
+                                       "different labels\n")
+    assert main(["diff", old, new, "--old-label", "x"]) == 0  # the other is info.version, or "new"
+
+
 def _schema_pair(write, a: str, b: str):
     spec = """
         paths:
