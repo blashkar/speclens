@@ -99,7 +99,7 @@ def test_get_schema_lists_own_and_inherited_fields(shop):
     assert [(f.name, f.type, f.required, f.inherited_from) for f in r.fields] == [
         ("bark", "string|null", False, None),
         ("name", "string", True, "v1:schema/Pet"),
-        ("status", "string enum ['available', 'sold']", True, "v1:schema/Pet"),  # required by Dog, not by Pet
+        ("status", 'string enum ["available", "sold"]', True, "v1:schema/Pet"),  # required by Dog, not by Pet
         ("kind", "string", False, "v1:schema/Pet"),
     ]
     assert r.used_by == ["v1:operation/GET /pets", "v1:operation/GET /pets/{petId}", "v1:operation/POST /orders"]
@@ -108,7 +108,7 @@ def test_get_schema_lists_own_and_inherited_fields(shop):
     assert "fields (4: 1 own, 3 inherited):" in text
     # A parent's name is said once, above its rows.
     assert "  inherited from Pet (3):\n    name: string, required [v1:field/Pet.name" in text
-    assert "    status: string enum ['available', 'sold'], required, readOnly " \
+    assert '    status: string enum ["available", "sold"], required, readOnly ' \
            "[v1:field/Pet.status openapi.yaml:55]" in text
     assert text.count("inherited from Pet") == 1
     assert "bark: string|null, optional [v1:field/Dog.bark openapi.yaml:68] — How it sounds." in text
@@ -119,7 +119,7 @@ def test_get_schema_options_with_discriminator_values(shop):
     r = shop.get_schema("pet")  # any case
     assert r.discriminator == "kind"
     assert [(o.type, o.values) for o in r.options] == [("Cat", ["Cat"]), ("Dog", ["Dog"])]
-    assert "options (oneOf, discriminator 'kind'):\n  Cat [v1:schema/Cat] when kind = 'Cat'" in r.to_text()
+    assert 'options (oneOf, discriminator "kind"):\n  Cat [v1:schema/Cat] when kind = "Cat"' in r.to_text()
     # The options' own fields apply only under a condition, so they are not Pet's fields.
     assert [f.name for f in r.fields] == ["name", "status", "kind"]
     assert "v1:schema/Cat" in r.conditional_fields
@@ -882,15 +882,15 @@ def test_rows_name_their_schema_and_keep_every_enum_value(spec):
     rows = {f.name: f for f in s.get_schema("Pet").fields}
     # A field whose type is a named schema says which: the schema to look up next.
     assert rows["spot"].type == "Spot"
-    assert rows["status"].type.startswith("Status (string enum ['a', 'b',")
+    assert rows["status"].type.startswith('Status (string enum ["a", "b",')
     # The default text shows the first values; full text and JSON have them all.
     assert rows["status"].enum == list("abcdefghij")
-    assert "'h', …]" in s.get_schema("Pet").to_text()
-    assert "'i', 'j']" in s.get_schema("Pet").to_text(full=True)
+    assert '"h", …]' in s.get_schema("Pet").to_text()
+    assert '"i", "j"]' in s.get_schema("Pet").to_text(full=True)
     assert s.get_schema("Status").to_dict()["enum"] == list("abcdefghij")
-    assert "'i', 'j']" in s.get_schema("Status").to_text(full=True)
+    assert '"i", "j"]' in s.get_schema("Status").to_text(full=True)
     [p] = s.get_operation("GET /pets").parameters
-    assert p.enum == list("abcdefghij") and "'i', 'j']" in s.get_operation("GET /pets").to_text(full=True)
+    assert p.enum == list("abcdefghij") and '"i", "j"]' in s.get_operation("GET /pets").to_text(full=True)
 
 
 def test_a_long_named_enum_is_listed_once_not_on_every_row(spec):
@@ -911,10 +911,10 @@ def test_a_long_named_enum_is_listed_once_not_on_every_row(spec):
             "KINDS", ", ".join(f"k{i}" for i in range(30)))})
     full = s.get_schema("Place").to_text(full=True)
     # Over 20 values held in a named schema: the row shows the first and says where the rest are.
-    assert "country: Country (string enum ['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', … 22 more in Country])" in full
+    assert 'country: Country (string enum ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", … 22 more in Country])' in full
     # Written on the field itself, there is nowhere else to read them: all of them.
-    assert "'k28', 'k29']" in full
-    assert "'c28', 'c29']" in s.get_schema("Country").to_text(full=True)
+    assert '"k28", "k29"]' in full
+    assert '"c28", "c29"]' in s.get_schema("Country").to_text(full=True)
     assert s.get_schema("Place").fields[0].enum == [f"c{i}" for i in range(30)]  # JSON has them all
     assert "… 22 more in Country]" in s.get_operation("GET /places").to_text(full=True)
 
@@ -935,7 +935,7 @@ def test_a_parent_schema_shows_its_discriminator_and_who_extends_it(spec):
                                          "mapping": {"cat": "v1:schema/Cat", "dog": "v1:schema/Dog"}}
     assert pet.extended_by == ["v1:schema/Cat", "v1:schema/Dog"]
     text = pet.to_text()
-    assert "discriminator 'kind': 'cat' -> Cat, 'dog' -> Dog" in text
+    assert 'discriminator "kind": "cat" -> Cat, "dog" -> Dog' in text
     assert "extended by (allOf): Cat, Dog" in text
 
 

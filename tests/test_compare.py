@@ -775,7 +775,7 @@ def test_a_diff_lists_a_shared_breaking_change_once_and_guesses_only_lone_rename
     assert "possibly renamed: query parameter page -> cursor in 2 operations" in text
     # A value added to a shared enum breaks two operations: said once, with the other operation.
     assert text.count("enum value added") == 1
-    assert "  breaking: enum value added: GET /boxes response 200 application/json: size (none -> 'l')" in text
+    assert "  breaking: enum value added: GET /boxes response 200 application/json: size (none -> \"l\")" in text
     assert "\n    also in 1 operation: GET /boxes/{id}\n" in text
 
 
@@ -824,7 +824,7 @@ def test_the_same_bound_or_value_written_another_way_is_no_change(write):
     [load] = s.compare("Ring.load", "a", "b").changes
     assert (load.kind, load.before, load.after) == ("constraint-loosened", "exclusiveMaximum 10", "maximum 10")
     assert {(c.kind, c.before, c.after) for c in s.compare("Ring.mode", "a", "b").changes} == {
-        ("enum-value-added", None, "'b'"), ("enum-value-removed", "'a'", None)}
+        ("enum-value-added", None, '"b"'), ("enum-value-removed", '"a"', None)}
 
 
 def test_a_field_renamed_on_a_parent_is_one_rename_naming_who_inherits_it(write):
@@ -1007,7 +1007,7 @@ def test_a_default_is_compared_as_the_json_value_it_is(write):
     s.load(root / "b/openapi.yaml", "b")
     # NaN on both sides is the same default; 1 and true are different values.
     assert [(c.kind, c.where, c.before, c.after) for c in s.compare("Gauge", "a", "b").changes] == [
-        ("default-changed", "on", "1", "True")]
+        ("default-changed", "on", "1", "true")]
 
 
 def test_a_schema_kept_under_an_extension_key_is_named_like_a_component(write):
@@ -1312,8 +1312,8 @@ def test_const_and_enum_values_are_compared_as_the_json_values_they_are(write):
     s.load(root / "b/openapi.yaml", "b")
     # 1 and true are different values; NaN is the same as NaN.
     assert sorted((c.kind, c.where, c.before, c.after) for c in s.compare("Flag", "a", "b").changes) == [
-        ("const-changed", "list", "[0, 1]", "[0, True]"), ("const-changed", "one", "1", "True"),
-        ("enum-value-added", "some", None, "True"), ("enum-value-removed", "some", "1", None)]
+        ("const-changed", "list", "[0, 1]", "[0, true]"), ("const-changed", "one", "1", "true"),
+        ("enum-value-added", "some", None, "true"), ("enum-value-removed", "some", "1", None)]
 
 
 PATHS = """

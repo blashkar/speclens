@@ -1,10 +1,21 @@
 """Words from identifiers and prose, the same way everywhere: names, search, and finding names in a question."""
 
+import json
 import re
 
 _WORD = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
 _STOP = {"a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is", "it", "of", "on", "or",
          "that", "the", "this", "to", "with", "what", "which", "does", "do", "how", "i", "me", "my"}
+
+
+def json_text(value) -> str:
+    """A value from a spec written as JSON writes it, as the spec's readers know it: `true`, `null`, `"sold"`,
+    `[0, true]`, not Python's `True`, `None`, `'sold'`. A value JSON has no spelling for (a YAML date or binary)
+    is written as text."""
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):  # a mapping whose keys JSON cannot hold
+        return str(value)
 
 
 def words(identifier: str) -> list[str]:

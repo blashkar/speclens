@@ -12,7 +12,7 @@ from itertools import combinations
 
 from . import graph as g
 from .graph import Graph, Node
-from .text import PATH, first_line, full_text, key, trim_path, variants, words
+from .text import PATH, first_line, full_text, json_text, key, trim_path, variants, words
 
 METHODS = ("GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE", "QUERY")
 
@@ -71,7 +71,7 @@ ENUM_SHOWN = 8  # values of an enum in the default text; full text and JSON have
 
 def _enum_text(values: list, cap: int | None = ENUM_SHOWN) -> str:
     shown = values if cap is None else values[:cap]
-    return "enum [" + ", ".join(repr(v) for v in shown) + (", …" if len(values) > len(shown) else "") + "]"
+    return "enum [" + ", ".join(json_text(v) for v in shown) + (", …" if len(values) > len(shown) else "") + "]"
 
 
 ROW_ENUM_FULL = 20  # a row's full text lists every value up to this many (most enums in public specs)
@@ -122,7 +122,7 @@ def _scalar(data: dict) -> str:
     if data.get("nullable"):
         text += "|null"
     if "const" in data:
-        text = (text + " " if text else "") + f"const {data['const']!r}"
+        text = (text + " " if text else "") + f"const {json_text(data['const'])}"
     if isinstance(data.get("enum"), list):
         text = (text + " " if text else "") + _enum_text(data["enum"])
     return text or "any"
@@ -288,15 +288,15 @@ class SchemaResult(Result):
         lines += _field_lines(self.fields, "  ", full)
         if self.options:
             head = f"options ({self.options[0].keyword}"
-            head += f", discriminator {self.discriminator!r}):" if self.discriminator else "):"
+            head += f", discriminator {json_text(self.discriminator)}):" if self.discriminator else "):"
             lines.append(head)
             for o in self.options:
-                values = f" when {self.discriminator} = " + " or ".join(repr(v) for v in o.values) if o.values else ""
+                values = f" when {self.discriminator} = " + " or ".join(json_text(v) for v in o.values) if o.values else ""
                 lines.append(f"  {o.type} [{o.id}]{values}")
         if self.discriminator_mapping and not self.options:
             m = self.discriminator_mapping
-            lines.append(f"discriminator {m['propertyName']!r}: " + ", ".join(
-                f"{value!r} -> {target.split('/', 1)[1]}" for value, target in m["mapping"].items()))
+            lines.append(f"discriminator {json_text(m['propertyName'])}: " + ", ".join(
+                f"{json_text(value)} -> {target.split('/', 1)[1]}" for value, target in m["mapping"].items()))
         if self.extended_by:
             lines.append("extended by (allOf): " + ", ".join(x.split("/", 1)[1] for x in self.extended_by))
         if self.conditional_fields:

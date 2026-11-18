@@ -753,8 +753,8 @@ def test_cover_names_starting_with_the_place_values_as_written_and_what_gained_t
     r = verify("In 2.0 `kind` gained `GIFTCARD`.", [p], cover=[p])  # kind holds GIFTCARD, which is new
     # Values of kind are named, so VOUCHER must be too; GIFT_CARD is another value, of category.
     assert [f.text for f in r.findings] == [
-        "breaking: enum value added: category (none -> 'GIFT_CARD') [2.0:field/Payment.category]",
-        "breaking: enum value added: kind (none -> 'VOUCHER') [2.0:field/Payment.kind]"], r.to_text()
+        'breaking: enum value added: category (none -> "GIFT_CARD") [2.0:field/Payment.category]',
+        'breaking: enum value added: kind (none -> "VOUCHER") [2.0:field/Payment.kind]'], r.to_text()
     assert verify("In 2.0 `kind` gained `GIFTCARD` and `VOUCHER`, and `category` gained `GIFT_CARD`.", [p],
                   cover=[p]).ok
     assert verify("In 2.0 `kind` and `category` gained new values.", [p], cover=[p]).ok  # the fields, no values
