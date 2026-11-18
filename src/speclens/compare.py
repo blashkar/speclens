@@ -468,8 +468,9 @@ class _Comparer:
         kids += kids_
         oa = {_option_key(ga, e): e for e in ga.outgoing(sa.id, g.OPTION)}
         ob = {_option_key(gb, e): e for e in gb.outgoing(sb.id, g.OPTION)}
-        if bool(oa) == bool(ob):  # restructured into options (or out of them): said as that, below
-            out = self.retyped(out, self.one_sided(sa, sb, all_a, all_b), sa, sb, sa.data, sb.data, "")
+        # restructured into options (or out of them): said as that, below
+        out = self.retyped(out, self.one_sided(sa, sb, all_a, all_b) if bool(oa) == bool(ob) else [], sa, sb,
+                           sa.data, sb.data, "")
         if ob and not oa:
             # Still accepting what it accepted if one option takes everything the old schema did.
             compatible = any(self.accepts_all(sa, gb.nodes[e.target]) for e in ob.values())
@@ -591,8 +592,11 @@ class _Comparer:
         out = self.values(da, db, where, na.id, nb.id)
         out += self.required_names(da, db, _required_flags(_fields(self.ga, sa) if sa else {}),
                                    _required_flags(_fields(self.gb, sb) if sb else {}), where, na.id, nb.id)
-        ea = _types(da) or (_option_types(self.ga, sa) if sa else set())
-        eb = _types(db) or (_option_types(self.gb, sb) if sb else set())
+        ea = _types(da) or (_shape(self.ga, sa) if sa else set())
+        eb = _types(db) or (_shape(self.gb, sb) if sb else set())
+        if ea and eb and not ea & eb and not (_types(da) and _types(db)):
+            # A type it is read as, with nothing in common with the other: `integer`, then `{items: ...}`.
+            return self.retyped(out, [], sa or na, sb or nb, da, db, where, always=True), []
         if ea and eb and ea != eb and not (_types(da) and _types(db)):
             # One side a single type, the other a choice of types: compare the sets.
             if eb - ea:
@@ -621,18 +625,30 @@ class _Comparer:
 
     def retyped(self, out: list[Change], parts: list[Change], na: Node, nb: Node, da: dict, db: dict, where: str,
                 always=False) -> list[Change]:
-        """A type changed to one with nothing in common, `integer` to an array of integers: `type` alone has said
-        so (`integer -> array`). Said once, as each side is described (`integer -> array of integer`); the items
-        or values one side has (`parts`) are part of that, not said again. A side that is a choice of types is
-        said by its list, which a description would shorten. With no parts, `type` has said it all. `always`: say it
-        even where `type` did not."""
-        ta, tb = _types(da), _types(db)
+        """A type changed to one with nothing in common, `integer` to an array of integers.
+
+        Where both sides state a type, `type` alone has said so (`integer -> array`): said once, as each side is
+        described (`integer -> array of integer`), and the items or values one side has (`parts`) are part of
+        that, not said again. With no parts, `type` has said it all.
+
+        Where a side states none, its type is what it is read as (`items`: an array; fields or a parent: an
+        object; options: theirs), as describe() reads it, and a change to a type with nothing in common is said
+        here, as `type` could not: `{items: ...}` written for an `integer` is an array, not a new constraint.
+
+        A side that states a choice of types is said by its list, which a description would shorten. `always`:
+        say it even where `type` did not."""
+        stated_a, stated_b = _types(da), _types(db)
+        ta = stated_a or _shape(self.ga, na)
+        tb = stated_b or _shape(self.gb, nb)
         i = next((i for i, c in enumerate(out) if c.kind in ("type-changed", "type-widened") and c.where == where),
                  None)
-        if not always and (i is None or ta & tb or not parts):
-            return out + parts
-        before = describe(self.ga, na) if len(ta) == 1 else "|".join(sorted(ta))
-        after = describe(self.gb, nb) if len(tb) == 1 else "|".join(sorted(tb))
+        if not always:
+            if not ta or not tb or ta & tb:
+                return out + parts
+            if i is not None and not parts or i is None and stated_a and stated_b:
+                return out + parts
+        before = describe(self.ga, na) if len(stated_a) <= 1 else "|".join(sorted(stated_a))
+        after = describe(self.gb, nb) if len(stated_b) <= 1 else "|".join(sorted(stated_b))
         if i is None:
             return out + [self.change("type-changed", where, before, after, na.id, nb.id)]
         out[i] = replace(out[i], before=before, after=after)
@@ -997,6 +1013,36 @@ def _allows_anything(graph: Graph, node: Node) -> bool:
     """`{}`: no type, no constraint, nothing below it. Not the same as a schema whose type comes from a parent."""
     constraining = {k for k in node.data if k not in ("title", "named", "required", "effective_required", *_ANNOTATIONS)}
     return not constraining and not node.data.get("required") and not any(graph.outgoing(node.id))
+
+
+def _shape(graph: Graph, node: Node, seen: frozenset = frozenset()) -> set:
+    """The types a schema is read as, without null: those it states, else what describe() reads it as. `items`
+    makes an array; a single parent and no fields, the parent's type; fields or parents, an object; options,
+    theirs, when every option has one. A field or parameter is read as its type. Empty when nothing says."""
+    if node.id in seen:
+        return set()
+    seen |= {node.id}
+    if _types(node.data):
+        return _types(node.data)
+    kind = g.FIELD_TYPE if node.kind == g.FIELD else g.PARAM_TYPE if node.kind == g.PARAMETER else None
+    if kind:
+        edges = graph.outgoing(node.id, kind)
+        return _shape(graph, graph.nodes[edges[0].target], seen) if edges else set()
+    if any(e.data.get("keyword") == "items" for e in graph.outgoing(node.id, g.ITEMS)):
+        return {"array"}
+    fields, parents = graph.outgoing(node.id, g.HAS_FIELD), graph.outgoing(node.id, g.INHERITS)
+    options = graph.outgoing(node.id, g.OPTION)
+    if options and not fields:
+        out: set = set()
+        for e in options:
+            t = _shape(graph, graph.nodes[e.target], seen)
+            if not t:
+                return set()
+            out |= t
+        return out
+    if len(parents) == 1 and not fields:
+        return _shape(graph, graph.nodes[parents[0].target], seen)
+    return {"object"} if fields or parents else set()
 
 
 def _option_types(graph: Graph, node: Node) -> set:
