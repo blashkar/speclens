@@ -947,3 +947,52 @@ def test_every_row_says_whether_it_is_required_or_optional(spec):
     assert "  query dryRun: boolean, optional [" in op
     assert "request body (optional): application/json: Pet" in op
     assert "Pet (own, optional)" in s.find_field("nickname").to_text()
+
+
+def test_a_field_whose_name_holds_dots(write):
+    root = write({"openapi.yaml": """
+        openapi: 3.1.0
+        info: {title: t, version: '1'}
+        paths: {}
+        components:
+          schemas:
+            Extra: {type: object, properties: {airline.leg.code: {type: string}, name: {type: string}}}
+            Pet: {type: object, properties: {name: {type: string}}}
+        """})
+    s = load_spec(root / "openapi.yaml", "v1")
+    r = s.find_field("airline.leg.code")  # no schema `airline` or `airline.leg`: the field's own name
+    assert [d.id for d in r.definitions] == ["v1:field/Extra.airline.leg.code"]
+    assert "  in Extra: string" in r.to_text()
+    assert [d.id for d in s.find_field("Extra.airline.leg.code").definitions] == ["v1:field/Extra.airline.leg.code"]
+    with pytest.raises(NotFound, match="no field named 'Pet.nme'"):  # Pet is a schema: its fields are suggested
+        s.find_field("Pet.nme")
+    with pytest.raises(NotFound, match=r"^no field named 'Nope\.name', and no schema named 'Nope'; closest: name$"):
+        s.find_field("Nope.name")
+    with pytest.raises(NotFound, match=r"^no field named 'Pett\.name', and no schema named 'Pett'; closest: name; "
+                                       r"closest schemas: Pet$"):
+        s.find_field("Pett.name")  # a typo in the schema part: said, with the schema it may be
+
+
+def test_names_in_any_script_have_keys_of_their_own(write):
+    root = write({"openapi.yaml": """
+        openapi: 3.1.0
+        info: {title: t, version: '1'}
+        paths: {}
+        components:
+          schemas:
+            名前: {type: object, properties: {氏名: {type: string}}}
+            住所: {type: object, properties: {郵便番号: {type: string}}}
+            Café: {type: object}
+            $: {type: object}
+            _: {type: object}
+        """})
+    s = load_spec(root / "openapi.yaml", "v1")
+    with pytest.raises(NotFound, match="closest: 名前"):  # was: ambiguous between the two, both keyed ""
+        s.get_schema("名")
+    assert s.get_schema("名前").name == "名前" and s.get_schema("café").name == "Café"
+    assert s.find_field("氏名").name == "氏名"
+    with pytest.raises(NotFound):  # no letter or digit: the empty key matches nothing
+        s.get_schema("-")
+    from speclens.text import key
+    assert [key(t) for t in ("Pet Store", "pet_store", "PetStore", "HTTPError_code2", "名前", "Café", "$")] == \
+        ["petstore", "petstore", "petstore", "httperrorcode2", "名前", "café", ""]

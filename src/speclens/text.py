@@ -13,8 +13,10 @@ def words(identifier: str) -> list[str]:
 
 
 def key(text: str) -> str:
-    """A name with case and separators removed: `Pet Store`, `pet_store` and `PetStore` share one key."""
-    return "".join(words(text))
+    """A name with case and separators removed: `Pet Store`, `pet_store` and `PetStore` share one key. Letters and
+    digits of any script are kept, so `名前` and `住所` have keys of their own; for ASCII text this is exactly the
+    words joined. A name with no letter or digit has the empty key, which matches nothing."""
+    return "".join(c for c in text if c.isalnum()).lower()
 
 
 def variants(k: str) -> set[str]:

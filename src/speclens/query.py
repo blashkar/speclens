@@ -18,11 +18,15 @@ METHODS = ("GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE")
 
 
 class NotFound(LookupError):
-    def __init__(self, what: str, name: str, suggestions=(), labels=()):
+    def __init__(self, what: str, name: str, suggestions=(), labels=(), also: "NotFound | None" = None):
+        """`also`: what else was looked for and not found either (`Nope.name`: no field, and no schema `Nope`)."""
         self.what, self.name, self.suggestions, self.labels = what, name, list(suggestions), list(labels)
-        message = f"no {what} named {name!r}"
+        self.also = also
+        message = f"no {what} named {name!r}" + (f", and no {also.what} named {also.name!r}" if also else "")
         if self.suggestions:
             message += f"; closest: {', '.join(self.suggestions)}"
+        if also and also.suggestions:
+            message += f"; closest {also.what}s: {', '.join(also.suggestions)}"
         if self.labels:
             message += f"; labels: {', '.join(self.labels)}"
         super().__init__(message)
@@ -594,7 +598,7 @@ class FieldResult(Result):
         n = len(self.definitions)
         lines = [f"field {self.name}: written in {n} place{'s' * (n != 1)}"]
         for d in self.definitions:
-            owner = d.id.split("/", 1)[1].rsplit(".", 1)[0]
+            owner = d.id.split("/", 1)[1].removesuffix("." + d.name)  # a field's own name may hold dots
             lines.append(f"  in {owner}: {d.type} {_cite(d.id, d.where)}" + (f" — {_cut(d.description, ROW_LIMIT, full)}"
                                                                                 if d.description else ""))
         lines.append(f"held by {len(self.holders)} schema{'s' * (len(self.holders) != 1)}:")
@@ -627,14 +631,24 @@ def find_field(spec, name: str) -> FieldResult:
     `name` is a field name (`weight`) or a schema and a field (`Dog.weight`, which follows inheritance)."""
     graph, index = spec.graph, spec.index
     ids = graph.resolve(name) or graph.resolve(f"{spec.label}:{g.FIELD}/{name}")
+    missed, schema_found = None, False  # `Nope.name`: the schema before the last dot, not found either
     if not ids and "." in name:
-        schema_name, field_name = name.rsplit(".", 1)
-        schema = _one(spec, g.SCHEMA, schema_name, "schema")
-        ids = graph.resolve(f"{spec.label}:{g.FIELD}/{schema.name}.{field_name}")
+        # A schema and its field; a field's own name may hold dots too (`user.name`), and so may a schema's: each
+        # place a dot splits them is tried, the last first. With no schema before any of them, it is a field name.
+        for at in [i for i, ch in enumerate(name) if ch == "."][::-1]:
+            try:
+                schema = _one(spec, g.SCHEMA, name[:at], "schema")
+            except NotFound as e:
+                missed = missed or e
+                continue
+            schema_found = True
+            ids = graph.resolve(f"{spec.label}:{g.FIELD}/{schema.name}.{name[at + 1:]}")
+            if ids:
+                break
     if not ids:
         ids, _ = index.fields.lookup(name)
     if not ids:
-        raise NotFound("field", name, index.fields.suggest(name))
+        raise NotFound("field", name, index.fields.suggest(name), also=None if schema_found else missed)
     definitions, holders, uses = [], {}, {}
     for fid in ids:
         f = graph.nodes[fid]
