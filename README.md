@@ -218,6 +218,13 @@ none there, anything is allowed; for `additionalProperties`, `false` allows noth
 way in the URL (`style`, `explode`) is breaking, unless it is a single value sent the same way either
 way (`explode` changes nothing for a string or a number), and a request body made optional is info.
 
+Conditions are compared too. `then`, `else` and a dependent schema (`dependentSchemas`) constrain a value when
+they apply: changes inside them are rated like any other, and one added tightens, one removed loosens; the same
+for `not`, and `false` (for `not`, `true`) allows nothing. A change inside `if` or `not` is a
+`condition-changed` warning, as whether it admits more or fewer values depends on the rest of the schema.
+Names made required that a schema does not declare as its own fields, as in `then: {required: [id]}`, are
+compared as names.
+
 The same thing written another way is no change: OpenAPI 3.0's `maximum: 5` with `exclusiveMaximum: true` and
 3.1's `exclusiveMaximum: 5` are one bound, and `enum: [x]` and `const: x` allow the same value.
 A field now written on a parent the schema inherits from with allOf (or no longer) is the same field: it is

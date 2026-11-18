@@ -328,9 +328,16 @@ class _Builder:
         key = (g.SCHEMA, self.location(doc, ptr))
         if key not in self.pending:
             data = self.copy(value, SCHEMA_DATA, doc, ptr)
-            for keyword in ("additionalProperties", "unevaluatedProperties"):
+            for keyword in ("additionalProperties", "unevaluatedProperties", "items", "unevaluatedItems"):
                 if value.get(keyword) is False:  # a constraint, though not a schema of its own
                     data[keyword] = False
+            # a condition written as a boolean: no schema of its own either, compared as what it is
+            for keyword in ("not", "if", "then", "else"):
+                if isinstance(value.get(keyword), bool):
+                    data[keyword] = value[keyword]
+            dependent = {k: v for k, v in _items(value.get("dependentSchemas")) if isinstance(v, bool)}
+            if dependent:
+                data["dependentSchemas"] = dependent
             self.add(g.SCHEMA, key[1], doc, ptr, data)
             self.required[key] = set()
             self.queue.append((key, value, doc, ptr))

@@ -61,6 +61,9 @@ RULES = {
     # not now, and the reverse (oasdiff: multiple-of-changed, error both ways)
     "multiple-of-changed": (BREAKING, BREAKING),
     "prefix-items-changed": (WARNING, WARNING),  # a tuple's positions added or removed (oasdiff: warning both ways)
+    # what `if` tests or `not` excludes, changed: which values that admits or refuses depends on the rest of the
+    # schema, so its direction is not guessed
+    "condition-changed": (WARNING, WARNING),
     # how a parameter's value is written in the URL or header (style, explode): clients that write it the old way
     # send what the API no longer reads
     "parameter-serialization-changed": (BREAKING, BREAKING),
@@ -309,6 +312,7 @@ class _Comparer:
         self.gb: Graph = b.graph
         self.pairs: dict[tuple, tuple[list[Change], list[tuple[str, tuple]]]] = {}
         self.queue = deque()
+        self.differ: dict[tuple, bool] = {}  # (a id, b id) -> whether they differ, for `if` and `not`
 
     def change(self, kind, where, before, after, side=None, a=None, b=None) -> Change:
         # The level and side are set when the change is reported, by whoever reaches it.
@@ -424,6 +428,7 @@ class _Comparer:
         out += [self.change("parent-added", "", None, p, None, sa.id, sb.id) for p in sorted(pb - pa)]
         out += [self.change("parent-removed", "", p, None, None, sa.id, sb.id) for p in sorted(pa - pb)]
         fa, fb = _fields(ga, sa), _fields(gb, sb)
+        out += self.required_names(sa.data, sb.data, _required_flags(fa), _required_flags(fb), "", sa.id, sb.id)
         options_a, options_b = ga.outgoing(sa.id, g.OPTION), gb.outgoing(sb.id, g.OPTION)
         if options_b and not options_a and not fb or options_a and not options_b and not fa:
             fa, fb = {}, {}  # restructured into (or out of) options: the options' comparison covers the fields
@@ -457,6 +462,9 @@ class _Comparer:
                 out_, kids_ = self.matched(ga.nodes[ia[k].target], gb.nodes[ib[k].target], step)
                 out += out_
                 kids += kids_
+        out_, kids_ = self.conditions(sa, sb)
+        out += out_
+        kids += kids_
         oa = {_option_key(ga, e): e for e in ga.outgoing(sa.id, g.OPTION)}
         ob = {_option_key(gb, e): e for e in gb.outgoing(sb.id, g.OPTION)}
         if bool(oa) == bool(ob):  # restructured into options (or out of them): said as that, below
@@ -572,13 +580,16 @@ class _Comparer:
             said, kinds = self.annotations(na, sa, nb, sb, where)
             return said + out, [(step, key, kinds) for step, key in kids]
         if not ta and not tb:
-            return self.values(na.data, nb.data, where, None, na.id, nb.id), []
+            return self.values(na.data, nb.data, where, None, na.id, nb.id) + \
+                self.required_names(na.data, nb.data, {}, {}, where, na.id, nb.id), []
         # Written inline on one side, a schema on the other: compare what each one is.
         sa = self.ga.nodes[ta[0]] if ta else None
         sb = self.gb.nodes[tb[0]] if tb else None
         da = {**(sa.data if sa else na.data), **_annotations(na.data)}
         db = {**(sb.data if sb else nb.data), **_annotations(nb.data)}
         out = self.values(da, db, where, None, na.id, nb.id)
+        out += self.required_names(da, db, _required_flags(_fields(self.ga, sa) if sa else {}),
+                                   _required_flags(_fields(self.gb, sb) if sb else {}), where, na.id, nb.id)
         ea = _types(da) or (_option_types(self.ga, sa) if sa else set())
         eb = _types(db) or (_option_types(self.gb, sb) if sb else set())
         if ea and eb and ea != eb and not (_types(da) and _types(db)):
@@ -603,7 +614,9 @@ class _Comparer:
                 edges_a, edges_b = ({_edge_key(e): e for k in (g.ITEMS, g.VALUES) for e in graph.outgoing(s.id, k)}
                                     if s else {} for graph, s in ((self.ga, sa), (self.gb, sb)))
                 out += [replace(c, where=_join(where, c.where)) for c in
-                        self.one_sided(sa or na, sb or nb, edges_a, edges_b)]
+                        self.one_sided(sa or na, sb or nb, edges_a, edges_b)
+                        + self.one_sided_conditions(sa or na, sb or nb, _conditions(self.ga, sa) if sa else {},
+                                                    _conditions(self.gb, sb) if sb else {})]
             else:
                 out.append(self.change("type-changed", where, describe(self.ga, na), describe(self.gb, nb), None,
                                        na.id, nb.id))
@@ -656,15 +669,18 @@ class _Comparer:
         kb = {k for k in ib if k not in ia}
         if any(k.startswith("prefixItems/") for k in ka | kb):
             out.append(self.change("prefix-items-changed", "", _positions(ia), _positions(ib), None, sa.id, sb.id))
-        for k in sorted(kb - {"additionalProperties", "unevaluatedProperties"}):
+        # `false` allows nothing: for these, said below in three steps
+        ranked = {"additionalProperties", "unevaluatedProperties"} | {
+            k for k in ("items", "unevaluatedItems") if sa.data.get(k) is False or sb.data.get(k) is False}
+        for k in sorted(kb - ranked):
             if not k.startswith("prefixItems/"):
                 out.append(self.change("constraint-tightened", "", f"no {k}", f"{k}: a schema", None, sa.id,
                                        ib[k].target))
-        for k in sorted(ka - {"additionalProperties", "unevaluatedProperties"}):
+        for k in sorted(ka - ranked):
             if not k.startswith("prefixItems/"):
                 out.append(self.change("constraint-loosened", "", f"{k}: a schema", f"no {k}", None, ia[k].target,
                                        sb.id))
-        for k in ("additionalProperties", "unevaluatedProperties"):
+        for k in sorted(ranked):
             # 0: anything (none, or true), 1: a schema, 2: nothing (false)
             wa = 2 if sa.data.get(k) is False else 1 if k in ia else 0
             wb = 2 if sb.data.get(k) is False else 1 if k in ib else 0
@@ -674,6 +690,77 @@ class _Comparer:
                                        f"{k}: {text[wa]}", f"{k}: {text[wb]}", None,
                                        ia[k].target if wa == 1 else sa.id, ib[k].target if wb == 1 else sb.id))
         return out
+
+    def required_names(self, da: dict, db: dict, fa: dict, fb: dict, where: str, a, b) -> list[Change]:
+        """Names a schema makes required, declared as its fields or not (in `then`, under `not`, a parent's fields),
+        given its fields as {name: required}. A field declared on the newer side says its own requirement (as
+        required-added or a required field added), and likewise for the older side, so only the rest is said here:
+        a name required without being declared, on one side, and not required on the other."""
+        ra = set(_names(da.get("required"))) | {n for n, r in fa.items() if r}
+        rb = set(_names(db.get("required"))) | {n for n, r in fb.items() if r}
+        return [self.change("required-added", _join(where, n), None, None, None, a, b)
+                for n in sorted(rb - ra) if n not in fb] + \
+            [self.change("required-removed", _join(where, n), None, None, None, a, b)
+             for n in sorted(ra - rb) if n not in fa]
+
+    def conditions(self, sa: Node, sb: Node):
+        """`not`, `if`, `then`, `else` and dependentSchemas, as (changes, pairs below). `then`, `else` and a
+        dependent schema constrain the value when they apply: compared like any schema below, and one added
+        tightens, one removed loosens. `not` added tightens, removed loosens. A change inside `if` or `not` turns
+        around or only selects, so it is one `condition-changed`, its direction not guessed."""
+        ca, cb = _conditions(self.ga, sa), _conditions(self.gb, sb)
+        out, kids = [], []
+        for k in [k for k in ca if k in cb]:
+            na, nb = self.ga.nodes[ca[k].target], self.gb.nodes[cb[k].target]
+            if k in ("if", "not"):
+                if self.differs(na, nb):
+                    out.append(self.change("condition-changed", "", f"{k}: a schema", f"{k}: another", None,
+                                           na.id, nb.id))
+            else:
+                out_, kids_ = self.matched(na, nb, k)
+                out += out_
+                kids += kids_
+        out += self.one_sided_conditions(sa, sb, ca, cb)
+        return out, kids
+
+    def one_sided_conditions(self, sa: Node, sb: Node, ca: dict, cb: dict) -> list[Change]:
+        """A condition written on one side only, or as `true` or `false` on either. For `then`, `else`, a dependent
+        schema and `not`, from what allows most to least: none (or the boolean that does nothing), a schema, the
+        boolean that allows nothing; a step down tightens, up loosens. `if` added, removed or made a boolean is a
+        `condition-changed`, unless its `then` or `else` changed with it and say so."""
+        out, steps = [], {}
+        ba, bb = _boolean_conditions(sa.data), _boolean_conditions(sb.data)
+        for k in sorted((set(ca) ^ set(cb)) | set(ba) | set(bb)):
+            if k in ca and k in cb:
+                continue
+            said = [f"{k}: a schema" if k in c else f"{k}: {str(b[k]).lower()}" if k in b else f"no {k}"
+                    for c, b in ((ca, ba), (cb, bb))]
+            if said[0] == said[1]:
+                continue
+            ids = (ca[k].target if k in ca else sa.id, cb[k].target if k in cb else sb.id)
+            if k == "if":
+                steps[k] = (said, ids)
+                continue
+            nothing = k == "not"  # the boolean that allows nothing: `not: true`, else `false`
+            wa, wb = (1 if k in c else 2 if b.get(k) is nothing else 0 for c, b in ((ca, ba), (cb, bb)))
+            if wa != wb:
+                steps[k] = None
+                out.append(self.change("constraint-tightened" if wb > wa else "constraint-loosened", "", *said, None,
+                                       *ids))
+        if "if" in steps and "then" not in steps and "else" not in steps:
+            (before, after), ids = steps["if"]
+            out.append(self.change("condition-changed", "", before, after, None, *ids))
+        return out
+
+    def differs(self, na: Node, nb: Node) -> bool:
+        """Whether two schemas allow different values: any change below them but a change of wording."""
+        key = (na.id, nb.id)
+        if key not in self.differ:
+            self.differ[key] = False  # while deciding: a cycle back to this pair adds no difference of its own
+            sub = _Comparer(self.a, self.b)
+            sub.differ = self.differ
+            self.differ[key] = any(c.kind not in _SAYING_ONLY for c in sub.reach([("", sub.pair(na, nb))], "both"))
+        return self.differ[key]
 
     def operations(self, oa: Node, ob: Node) -> list[Change]:
         ga, gb = self.ga, self.gb
@@ -913,7 +1000,9 @@ def _option_types(graph: Graph, node: Node) -> set:
 
 
 def _structured(graph: Graph, node: Node) -> bool:
-    return any(graph.outgoing(node.id, k) for k in (g.HAS_FIELD, g.ITEMS, g.OPTION, g.VALUES))
+    return any(graph.outgoing(node.id, k) for k in (g.HAS_FIELD, g.ITEMS, g.OPTION, g.VALUES, g.CONDITIONAL, g.NOT)) \
+        or any(node.data.get(k) is False for k in ("items", "unevaluatedItems", "additionalProperties",
+                                                     "unevaluatedProperties")) or bool(_boolean_conditions(node.data))
 
 
 _ANNOTATIONS = ("description", "deprecated", "readOnly", "writeOnly", "default")
@@ -1035,7 +1124,39 @@ def _edge_key(e) -> str:
         return f"{keyword}/{e.data['index']}"
     if "pattern" in e.data:
         return f"{keyword}/{e.data['pattern']}"
+    if keyword == "dependentSchemas":
+        return f"{keyword}/{e.data['when']}"
     return keyword
+
+
+def _required_flags(fields: dict) -> dict:
+    """{name: required} for the fields _fields gives."""
+    return {n: e.data["required"] for n, (_, e) in fields.items()}
+
+
+def _names(value) -> list:
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+
+def _boolean_conditions(data: dict) -> dict:
+    """`not`, `if`, `then`, `else` and dependent schemas written as `true` or `false`, by keyword."""
+    out = {k: data[k] for k in ("not", "if", "then", "else") if isinstance(data.get(k), bool)}
+    dependent = data.get("dependentSchemas")
+    out.update({f"dependentSchemas/{k}": v for k, v in (dependent.items() if isinstance(dependent, dict) else ())
+                if isinstance(v, bool)})
+    return out
+
+
+def _conditions(graph: Graph, node: Node) -> dict:
+    """The `not`, `if`, `then`, `else` and dependentSchemas edges of a schema, by keyword (a dependent schema by
+    the property it depends on). A `$dynamicRef`'s possible targets are references, compared where they are."""
+    return {_edge_key(e): e for kind in (g.CONDITIONAL, g.NOT) for e in graph.outgoing(node.id, kind)
+            if e.data.get("keyword") != "$dynamicRef"}
+
+
+# kinds of change that do not change which values a schema allows
+_SAYING_ONLY = {"description-changed", "deprecated", "undeprecated", "read-only-changed", "write-only-changed",
+            "default-changed", "type-replaced", "field-moved", "parent-added", "parent-removed", "possibly-renamed"}
 
 
 def _wrapper_of(graph: Graph, node_id: str):
