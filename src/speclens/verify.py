@@ -981,8 +981,25 @@ def _required_subjects(clause: str) -> list[str]:
                     following = re.match(r"\W*([A-Za-z]+)", text[near[0][1]:])
                     if not following or following.group(1).lower() not in _KIND_WORDS:
                         continue  # "the required status changed": being required, not a field
-                out.append(near[0][2])
+                out.append(_owned(text, names, near[0]) if side == "before" else near[0][2])
     return list(dict.fromkeys(out))
+
+
+_OWNER_BEFORE = re.compile(r"\b(?:in|of|on|inside|within)\s+(?:the\s+|an?\s+)?(?:schema\s+|object\s+|model\s+)?$",
+                           re.I)
+
+
+def _owned(text: str, names: list, near: tuple) -> str:
+    """The name "required" is said of, when the nearest name before it is where a field is: "`tag` in Pet is
+    required" and "the `tag` field of Pet is optional" are said of Pet.tag, not of Pet."""
+    i = names.index(near)
+    owner = _OWNER_BEFORE.search(text[:near[0]])
+    if i == 0 or not owner or "." in near[2]:
+        return near[2]
+    field = names[i - 1]
+    if not all(w.lower() in _TIES for w in re.findall(r"[A-Za-z']+", text[field[1]:owner.start()])):
+        return near[2]
+    return f"{near[2]}.{field[2]}"
 
 
 def _path_name(code: str) -> str:
