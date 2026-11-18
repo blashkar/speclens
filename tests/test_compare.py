@@ -1440,3 +1440,45 @@ def test_compare_one_field_says_whether_it_became_required(write):
     assert kinds(s.compare("Pet.chip", "a", "b")) == {("required-field-added", "", "breaking")}
     assert kinds(s.compare("Pet.tag", "b", "a")) == {("required-removed", "", "info")}
     assert kinds(s.compare("Pet.chip", "b", "a")) == {("required-field-removed", "", "warning")}
+
+
+def test_a_type_changed_to_an_array_of_it_is_said_once(write):
+    field = "{type: object, properties: {n: %s}}"
+    named = "{type: object, properties: {n: {$ref: '#/components/schemas/%s'}}}"
+    ints = "{type: array, items: {type: integer}}"
+    cases = {  # written inline, a schema of its own on one side, a field: one line, each side as described
+        ("{type: integer}", ints): [("type-changed", "integer", "array of integer")],
+        (ints, "{type: integer}"): [("type-changed", "array of integer", "integer")],
+        (field % "{type: string}", field % ints): [("type-changed", "string", "array of integer")],
+        (field % "{type: object, additionalProperties: {type: string}}", field % ints): [
+            ("type-changed", "object", "array of integer")],
+        # a choice of types is said by its list, and its items, which apply to its array, are said too
+        ("{type: integer}", "{type: [integer, array], items: {type: integer}}"): [
+            ("type-changed", "integer", "array|integer"), ("constraint-tightened", "no items", "items: a schema")],
+        ("{type: string, enum: [a]}", "{type: integer}"): [  # no parts: said by `type`, as before
+            ("type-changed", "string", "integer"), ("constraint-loosened", "enum of 1", "any value")],
+    }
+    for (a, b), want in cases.items():
+        assert _schema_pair(write, a, b) == want, (a, b)
+    spec = """
+        paths:
+          /x:
+            post:
+              parameters: [{name: q, in: query, schema: %s}]
+              requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/X'}}}}
+              responses: {'200': {description: ok}}
+        components:
+          schemas:
+            Id: {type: integer}
+            Ids: %s
+            X: %s
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(spec % ("{type: integer}", ints, named % "Id")),
+                  "b/openapi.yaml": HEAD + dedent(spec % (ints, ints, named % "Ids"))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    assert sorted((c.kind, c.where, c.before, c.after) for c in s.compare("POST /x", "a", "b").changes) == [
+        ("type-changed", "parameter query q", "integer", "array of integer"),
+        ("type-changed", "request application/json: n", "integer", "array of integer"),
+        ("type-replaced", "request application/json: n", "Id", "Ids")]

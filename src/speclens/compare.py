@@ -469,7 +469,7 @@ class _Comparer:
         oa = {_option_key(ga, e): e for e in ga.outgoing(sa.id, g.OPTION)}
         ob = {_option_key(gb, e): e for e in gb.outgoing(sb.id, g.OPTION)}
         if bool(oa) == bool(ob):  # restructured into options (or out of them): said as that, below
-            out += self.one_sided(sa, sb, all_a, all_b)
+            out = self.retyped(out, self.one_sided(sa, sb, all_a, all_b), sa, sb, sa.data, sb.data, "")
         if ob and not oa:
             # Still accepting what it accepted if one option takes everything the old schema did.
             compatible = any(self.accepts_all(sa, gb.nodes[e.target]) for e in ob.values())
@@ -615,10 +615,28 @@ class _Comparer:
                         self.one_sided(sa or na, sb or nb, edges_a, edges_b)
                         + self.one_sided_conditions(sa or na, sb or nb, _conditions(self.ga, sa) if sa else {},
                                                     _conditions(self.gb, sb) if sb else {})]
-            else:
-                out.append(self.change("type-changed", where, describe(self.ga, na), describe(self.gb, nb), na.id,
-                                       nb.id))
+            else:  # the type changed, and one side has parts
+                out = self.retyped(out, [], na, nb, da, db, where, always=True)
         return out, []
+
+    def retyped(self, out: list[Change], parts: list[Change], na: Node, nb: Node, da: dict, db: dict, where: str,
+                always=False) -> list[Change]:
+        """A type changed to one with nothing in common, `integer` to an array of integers: `type` alone has said
+        so (`integer -> array`). Said once, as each side is described (`integer -> array of integer`); the items
+        or values one side has (`parts`) are part of that, not said again. A side that is a choice of types is
+        said by its list, which a description would shorten. With no parts, `type` has said it all. `always`: say it
+        even where `type` did not."""
+        ta, tb = _types(da), _types(db)
+        i = next((i for i, c in enumerate(out) if c.kind in ("type-changed", "type-widened") and c.where == where),
+                 None)
+        if not always and (i is None or ta & tb or not parts):
+            return out + parts
+        before = describe(self.ga, na) if len(ta) == 1 else "|".join(sorted(ta))
+        after = describe(self.gb, nb) if len(tb) == 1 else "|".join(sorted(tb))
+        if i is None:
+            return out + [self.change("type-changed", where, before, after, na.id, nb.id)]
+        out[i] = replace(out[i], before=before, after=after)
+        return out
 
     def annotations(self, fa: Node, ta: Node, fb: Node, tb: Node, where: str) -> tuple[list[Change], frozenset]:
         """A field's description, deprecated, readOnly, writeOnly and default as they apply, for those the field
