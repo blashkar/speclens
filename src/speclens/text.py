@@ -13,8 +13,10 @@ def words(identifier: str) -> list[str]:
 
 
 def key(text: str) -> str:
-    """A name with case and separators removed: `Pet Store`, `pet_store` and `PetStore` share one key."""
-    return "".join(words(text))
+    """A name with case and separators removed: `Pet Store`, `pet_store` and `PetStore` share one key. Letters and
+    digits of any script are kept, so `名前` and `住所` have keys of their own; for ASCII text this is exactly the
+    words joined. A name with no letter or digit has the empty key, which matches nothing."""
+    return "".join(c for c in text if c.isalnum()).lower()
 
 
 def variants(k: str) -> set[str]:
@@ -76,3 +78,15 @@ def trim_path(path: str) -> str:
         else:
             break
     return path
+
+
+# A label: letters, digits and `_` (any script), `.`, `+` and `-`, so semver such as 1.0.0-rc.1 and 1.0.0+build5
+# fits; it starts and ends with a letter, digit or `_`, so a lone "." (the end of every sentence) is never one. Ids
+# are written `label:kind/name`, and verify reads them back with this same rule.
+LABEL = r"\w(?:[\w.+-]*\w)?"
+
+
+def as_label(text: str | None) -> str | None:
+    """A label made from a version or a name: other characters become `-` ("2.0 beta" -> "2.0-beta")."""
+    label = re.sub(r"[^\w.+-]+", "-", text or "").strip(".+-")
+    return label or None

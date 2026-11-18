@@ -48,7 +48,8 @@ class NameIndex:
             ids = table[kind].get(k)
             if ids:
                 return _unique(ids), how
-        ids = [i for v in sorted(variants(key(name))) for i in self.plain[kind].get(v, ())]
+        k = key(name)
+        ids = [i for v in sorted(variants(k)) for i in self.plain[kind].get(v, ())] if k else []
         return _unique(ids), "plain words" if ids else "none"
 
     def suggest(self, kind: str, name: str, limit: int = 5) -> list[str]:
@@ -81,7 +82,8 @@ class FieldIndex:
         ids = self.by_lower.get(name.lower())
         if ids:
             return list(ids), "ignoring case"
-        ids = [i for n, found in self.by_name.items() if key(n) in variants(key(name)) for i in found]
+        k = key(name)
+        ids = [i for n, found in self.by_name.items() if k and key(n) in variants(k) for i in found]
         return ids, "plain words" if ids else "none"
 
     def suggest(self, name: str, limit: int = 5) -> list[str]:

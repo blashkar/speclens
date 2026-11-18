@@ -35,10 +35,10 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, is_dataclass
 
 from .query import Result
-from .text import PATH, key, label_key, trim_path, words
+from .text import LABEL, PATH, key, label_key, trim_path, words
 
 KINDS = ("operation", "schema", "field", "parameter")
-_ID = re.compile(r"(?<![\w.:-])([\w.-]+):(operation|schema|field|parameter)/")
+_ID = re.compile(rf"(?<![\w.:+-])({LABEL}):(operation|schema|field|parameter)/")  # a label, as spec allows
 _CODE = re.compile(r"`([^`\n]+)`")
 _PART = r"[$@]?[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*"  # pet_owner, petOwner, pet-owner, $id, @type
 _IDENT = re.compile(rf"{_PART}(?:\.{_PART})*")

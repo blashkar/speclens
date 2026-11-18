@@ -14,7 +14,7 @@ from .graph import Graph
 from .index import Indexes
 from .issues import ERROR, Issue
 from .loader import Document
-from .text import label_key
+from .text import LABEL, as_label, label_key
 
 
 @dataclass
@@ -35,12 +35,13 @@ class Spec:
             self._index = Indexes(self.graph)
         return self._index
 
-    def get_schema(self, name: str, expand: int = 0, max_chars: int | None = None) -> query.SchemaResult:
-        return query.get_schema(self, name, expand, max_chars)
+    def get_schema(self, name: str, expand: int = 0, max_chars: int | None = None, *,
+                   full: bool = False) -> query.SchemaResult:
+        return query.get_schema(self, name, expand, max_chars, full=full)
 
     def get_operation(self, method: str, path: str | None = None, expand: int = 0, errors: bool = False,
-                      max_chars: int | None = None) -> query.OperationResult:
-        return query.get_operation(self, method, path, expand, errors, max_chars)
+                      max_chars: int | None = None, *, full: bool = False) -> query.OperationResult:
+        return query.get_operation(self, method, path, expand, errors, max_chars, full=full)
 
     def find_field(self, name: str) -> query.FieldResult:
         return query.find_field(self, name)
@@ -83,8 +84,9 @@ class Spec:
 
 
 def check_label(label: str) -> str:
-    if not label or ":" in label or "/" in label or label != label.strip():
-        raise ValueError(f"a label must be non-empty, without ':' or '/' or surrounding spaces: {label!r}")
+    if not isinstance(label, str) or not re.fullmatch(LABEL, label):
+        raise ValueError(f"a label is letters, digits, '_', '.', '+' and '-' only, starting and ending with a letter, "
+                         f"digit or '_' (no spaces, ':' or '/'): {label!r}")
     return label
 
 
@@ -109,9 +111,11 @@ def load_spec(path, label: str | None = None, allow: list | None = None) -> Spec
     else:
         root = Path(path)
         roots = [root]
-    if label is None:
-        label = _default_label(roots, root)
-    graph, documents, issues, version = build(roots, check_label(label), allow)
+    # Without a label, the roots' info.version as written, when they agree, else the folder's or file's name.
+    resolved = root.resolve()  # "." has no name of its own
+    fallback = as_label(resolved.name if resolved.is_dir() else resolved.stem) or "spec"
+    graph, documents, issues, version = build(roots, None if label is None else check_label(label), allow, fallback)
+    label = graph.label
     return Spec(label=label, root=root.resolve(), version=version, graph=graph, documents=documents,
                 issues=issues, roots=[r.resolve() for r in roots])
 
@@ -139,27 +143,6 @@ def find_roots(folder: Path) -> list[Path]:
             elif _ROOT_KEY.search(text):
                 out.append(p)
     return out
-
-
-def _default_label(roots: list[Path], root: Path) -> str:
-    versions = {_info_version(r) for r in roots}
-    if len(versions) == 1 and None not in versions:
-        return versions.pop()
-    root = root.resolve()  # "." has no name of its own
-    return (root.name if root.is_dir() else root.stem) or "spec"
-
-
-def _info_version(root: Path) -> str | None:
-    import yaml
-    try:
-        with open(root, encoding="utf-8") as f:
-            data = yaml.load(f, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
-        version = str(data["info"]["version"]).strip()
-        if version and ":" not in version and "/" not in version:
-            return version
-    except Exception:
-        pass
-    return None
 
 
 class SpecSet:
@@ -191,12 +174,13 @@ class SpecSet:
         return self.specs[label]
 
     def get_schema(self, name: str, label: str | None = None, expand: int = 0,
-                   max_chars: int | None = None) -> query.SchemaResult:
-        return self.get(label).get_schema(name, expand, max_chars)
+                   max_chars: int | None = None, *, full: bool = False) -> query.SchemaResult:
+        return self.get(label).get_schema(name, expand, max_chars, full=full)
 
     def get_operation(self, method: str, path: str | None = None, label: str | None = None, expand: int = 0,
-                      errors: bool = False, max_chars: int | None = None) -> query.OperationResult:
-        return self.get(label).get_operation(method, path, expand, errors, max_chars)
+                      errors: bool = False, max_chars: int | None = None, *,
+                      full: bool = False) -> query.OperationResult:
+        return self.get(label).get_operation(method, path, expand, errors, max_chars, full=full)
 
     def find_field(self, name: str, label: str | None = None) -> query.FieldResult:
         return self.get(label).find_field(name)
