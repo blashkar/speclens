@@ -31,6 +31,7 @@ from the evidence; a claim worded another way is not checked.
 """
 
 import re
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, is_dataclass
 
 from .query import Result
@@ -227,6 +228,7 @@ class _Evidence:
         self.methods: dict[tuple[str, str], set[str]] = {}  # (label, path) -> all the methods it has
         self.types: dict[str, set[str]] = {}  # field or parameter name -> the types its rows show
         self._anywhere: set[str] | None = None
+        self.owners: dict[str, str] = {}  # field id -> the schema holding it, from results giving the field's name
         for item in items:
             self.add(item)
 
@@ -239,8 +241,10 @@ class _Evidence:
             for x in item:
                 self.add(x, label)
         elif is_dataclass(item) and hasattr(item, "to_dict"):
+            d = item.to_dict()
+            self.add_owners(d)  # before its text: the text's field ids are read with the schemas they are in
             self.add_text(item.to_text(full=True) if isinstance(item, Result) else item.to_text(), label)
-            self.add_dict(item.to_dict())
+            self.add_dict(d)
         elif is_dataclass(item) and not isinstance(item, type):
             self.add(asdict(item), label)
         elif isinstance(item, dict):
@@ -262,14 +266,44 @@ class _Evidence:
         elif kind == "operation" and " " in name:
             self.operations.setdefault(label, set()).add(_operation(*name.split(" ", 1)))
         elif kind == "field" and "." in name:
-            owner, member = name.rsplit(".", 1)
+            owner = self.owner_of(node_id, name)
+            member = name[len(owner) + 1:]
             self.schemas.add(owner)
             self.members.setdefault(label, set()).add((owner, member))
+
+    def dotted_names(self) -> frozenset:
+        """Field and member names holding a dot, as the evidence shows them."""
+        names = {m for ms in self.members.values() for _, m in ms} | set(self.limits) | set(self.required) | \
+            set(self.types)
+        return frozenset(n for n in names if "." in n)
+
+    def owner_of(self, node_id: str, name: str) -> str:
+        """The schema in a field id's `Schema.field`. A field's own name may hold dots (`airline.leg.code`), and so
+        may a schema's (`Pet.v2`): as a result gave it, else the longest schema named so far, else up to the last
+        dot."""
+        if node_id in self.owners:
+            return self.owners[node_id]
+        dots = [i for i, ch in enumerate(name) if ch == "."]
+        return next((name[:i] for i in dots[::-1] if name[:i] in self.schemas), name[:dots[-1]])
 
     def mark_required(self, label: str, name: str, required: bool, owner: str | None = None):
         self.required.setdefault(name, {}).setdefault(label, set()).add(required)
         if owner:
             self.required_in.setdefault((owner, name), {}).setdefault(label, set()).add(required)
+
+    def add_owners(self, d: dict):
+        """Field ids with the field's own name beside them: the schema is the id without that name."""
+        stack = [d]
+        while stack:
+            v = stack.pop()
+            if isinstance(v, dict):
+                node_id, name = str(v.get("id", "")), v.get("name")
+                if isinstance(name, str) and _ID.match(node_id) and ":field/" in node_id \
+                        and node_id.endswith("." + name):
+                    self.owners[node_id] = node_id.split("/", 1)[1][:-len(name) - 1]
+                stack.extend(v.values())
+            elif isinstance(v, (list, tuple)):
+                stack.extend(v)
 
     def add_required(self, d: dict):
         """Whether each field and parameter in a result is required, in the version its id names."""
@@ -317,7 +351,7 @@ class _Evidence:
                 if isinstance(v.get("name"), str) and isinstance(v.get("limits"), dict) and _ID.match(node_id):
                     label, rest = node_id.split(":", 1)
                     kind, name = rest.split("/", 1)
-                    owner = name.rsplit(".", 1)[0] if kind == "field" and "." in name else None
+                    owner = self.owner_of(node_id, name) if kind == "field" and "." in name else None
                     for k, x in v["limits"].items():
                         self.mark_limit(label, v["name"], k, x, owner)
                 stack.extend(v.values())
@@ -385,6 +419,7 @@ class _Evidence:
             self.known_in.setdefault(label, set()).update(_words_of(text))
 
     def add_dict(self, d: dict):
+        self.add_owners(d)
         for s in _strings(d):
             if _ID.match(s):
                 self.add_id(s)
@@ -607,6 +642,33 @@ def _prepared(evidence) -> "_Evidence":
 
 
 def _verify(answer: str, ev: "_Evidence", known=None, cover=()) -> Verification:
+    dotted = _DOTTED.set(ev.dotted_names())
+    try:
+        return _checked(answer, ev, known, cover)
+    finally:
+        _DOTTED.reset(dotted)
+
+
+# Field names holding dots that the evidence being checked against shows (`airline.leg.code`): each is one name,
+# not a path through `airline` and `leg`. Set by _verify for the answer it checks; empty otherwise.
+_DOTTED: ContextVar[frozenset] = ContextVar("dotted", default=frozenset())
+
+
+def _member(subject: str) -> tuple[str, str]:
+    """(owner, member) of `Owner.member`, or ("", name): a field name holding dots that the evidence shows stays
+    whole (`Extra.airline.leg.code` -> Extra, airline.leg.code); otherwise split at the last dot."""
+    dotted = _DOTTED.get()
+    if subject in dotted:
+        return "", subject
+    # the longest such name: `airline.leg.code`, not `leg.code` with `Extra.airline` taken for the schema
+    name = max((n for n in dotted if subject.endswith("." + n)), key=len, default=None)
+    if name:
+        return subject[:-len(name) - 1], name
+    owner, _, member = subject.rpartition(".")
+    return owner, member
+
+
+def _checked(answer: str, ev: "_Evidence", known=None, cover=()) -> Verification:
     known_words = set().union(*(_words_of(str(k)) for k in known)) if known else set()
     findings: list[Finding] = []
 
@@ -856,7 +918,7 @@ def _check_required(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
             labels = _labels_in(clause, ev.labels) or (in_sentence if len(in_sentence) == 1 else []) or \
                 ([section] if section else [])
             for subject in [_path_name(heading)] if flag else _required_subjects(clause):
-                owner, _, member = subject.rpartition(".")
+                owner, member = _member(subject)
                 shown = ev.required_in.get((owner, member)) if owner else ev.required.get(subject)
                 if not shown:
                     continue
@@ -928,7 +990,9 @@ def _path_name(code: str) -> str:
     several levels (`pets[].tag` -> tag), nothing for code that is not a name."""
     code = code.strip()
     if _IDENT.fullmatch(code):
-        return code if code.count(".") <= 1 else code.rsplit(".", 1)[1]
+        if code.count(".") <= 1 or code in _DOTTED.get() or "." not in _member(code)[0]:
+            return code  # `Pet.tag`, or a field whose own name holds dots, alone or with its schema
+        return code.rsplit(".", 1)[1]
     parts = [p for p in re.split(r"[.\[\]]+", code) if p]
     return parts[-1] if parts and all(_IDENT.fullmatch(p) for p in parts) else ""
 
@@ -1135,7 +1199,7 @@ _LIMIT_PLAIN = re.compile(rf"(?<![\w`-])(max(?:imum)?|min(?:imum)?)\s+((?:[A-Za-
 
 def _shown_for(ev: _Evidence, subject: str, schemas: list[str], labels: list[str]) -> dict:
     """The limits the evidence shows for a name, in the schema it is written with when there is one."""
-    owner, _, member = subject.rpartition(".")
+    owner, member = _member(subject)
     shown = None
     for o in ([owner] if owner else []) + schemas:
         shown = shown or ev.limits_in.get((o, member or subject))
@@ -1237,7 +1301,7 @@ def _check_limits(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
                     looked = _shown_for(ev, subject, schemas, labels)
                     keywords = {k for side in sides for k in _KEYWORDS[(side, counts)]}
                     values = {(lab, k): v for lab, kv in looked.items() for k, v in kv.items() if k in keywords}
-                    if subject.rpartition(".")[2] in ev.limits or values:
+                    if _member(subject)[1] in ev.limits or values:
                         checked += 1
                     if values:
                         out.append(Finding("contradicted-claim", clause.strip(),
@@ -1552,7 +1616,11 @@ def _comparisons_about(ev: _Evidence, subject: str):
 
 
 def _is_path(name: str) -> bool:
-    """A path through a schema, as a comparison writes where a change is: `pets[].tag`, `owner.address.city`."""
+    """A path through a schema, as a comparison writes where a change is: `pets[].tag`, `owner.address.city`; not
+    a field whose own name holds dots (`airline.leg.code`, `Extra.airline.leg.code`) as the evidence shows it."""
+    owner, member = _member(name)
+    if member in _DOTTED.get() and "." not in owner:
+        return False
     return bool(_PATH_NAME.fullmatch(name)) and ("[" in name or name.count(".") > 1)
 
 
