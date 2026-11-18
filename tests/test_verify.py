@@ -1130,3 +1130,23 @@ def test_ids_with_a_build_or_prerelease_label_are_read_whole(write):
         assert r.ok, (label, r.to_text())
         r = verify(f"See [{label}:schema/Cat].", [s.get_schema("Pet")])
         assert [(f.kind, f.text) for f in r.findings] == [("unknown-citation", f"{label}:schema/Cat")]
+
+
+def test_a_renamed_path_parameter_is_checked_as_renamed(write):
+    op = """
+        paths:
+          /pets/{%s}:
+            get:
+              parameters: [{name: %s, in: path, required: true, schema: {type: string}}]
+              responses: {'200': {description: ok}}
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(op % ("id", "id")),
+                  "b/openapi.yaml": HEAD.replace("'1'", "'2'") + dedent(op % ("petId", "petId"))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "1.0")
+    s.load(root / "b/openapi.yaml", "2.0")
+    for ev in ([s.compare("GET /pets/{id}", "1.0", "2.0")], [s.diff("1.0", "2.0")]):
+        assert verify("In 2.0, the path parameter `id` of `GET /pets/{petId}` was renamed to `petId`.", ev).ok
+        assert verify("In 2.0, `GET /pets/{id}` is the same operation; its path parameter is now `petId`.", ev).ok
+        # The operation was not removed.
+        assert not verify("In 2.0, `GET /pets/{id}` was removed.", ev).ok
