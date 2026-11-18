@@ -142,6 +142,20 @@ def test_validate(write):
     assert not error and text.startswith("v1: 1 errors") and "Nope" in text
 
 
+def test_validate_checks_descriptions_once_per_loaded_spec(write, monkeypatch):
+    import speclens.mcp_server as server_module
+    calls = []
+    real = server_module.description_issues
+    monkeypatch.setattr(server_module, "description_issues", lambda s: calls.append(s) or real(s))
+    root = write({"openapi.yaml": V1})
+    specs = SpecSet()
+    specs.load(root / "openapi.yaml", "v1")
+    specs.load(root / "openapi.yaml", "v2")
+    out = call(build_server(specs), ("validate", {"label": "v1"}), ("validate", {"label": "v1"}),
+               ("validate", {"label": "v2"}))
+    assert out[0] == out[1] and out[2][0].startswith("v2:") and len(calls) == 2  # once for each spec
+
+
 def test_load_spec_only_from_allowed_folders(write):
     root = write({"api/openapi.yaml": V1, "other/openapi.yaml": V1, "secret.yaml": "Pet: {type: object}\n",
                   "api/leak/openapi.yaml": V1.replace("$ref: '#/components/schemas/Pet'", "$ref: '../../secret.yaml#/Pet'")})

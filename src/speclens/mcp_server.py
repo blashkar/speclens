@@ -155,6 +155,8 @@ def build_server(specs: SpecSet, allow: list[Path] | None = None):
         shown(text)  # not the whole diff: the model saw only these
         return text
 
+    described: dict = {}  # label -> (the spec checked, its description issues)
+
     @tool
     def validate(label: str | None = None, limit: int = 50) -> str:
         """Broken references and other problems in a spec, with file:line, and descriptions that state a limit the
@@ -163,7 +165,9 @@ def build_server(specs: SpecSet, allow: list[Path] | None = None):
             s = specs.get(label)
         except KeyError as e:
             raise ToolError(str(e).strip("'\"")) from e
-        issues = s.issues + description_issues(s)
+        if described.get(s.label, (None,))[0] is not s:  # checked once per loaded spec: it does not change
+            described[s.label] = (s, description_issues(s))
+        issues = s.issues + described[s.label][1]
         lines = [f"{s.label}: {len(s.errors)} errors, {len(issues) - len(s.errors)} warnings"]
         lines += [i.to_text() for i in issues[:limit]]
         if len(issues) > limit:

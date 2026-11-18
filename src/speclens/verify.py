@@ -522,9 +522,13 @@ def _cited_ids(answer: str) -> list[tuple[str, tuple[int, int]]]:
     line's end."""
     out = []
     for match in _ID.finditer(answer):
-        rest = answer[match.end():]
-        end, depth = len(rest), 0
-        for i, ch in enumerate(rest):  # a name can hold brackets itself: `items[id]`
+        # read in place, not from a copy of the rest: the text may be a whole result with many ids
+        start = match.end()
+        line_end = answer.find("\n", start)
+        line_end = len(answer) if line_end < 0 else line_end
+        end, depth = line_end, 0
+        for i in range(start, line_end):  # a name can hold brackets itself: `items[id]`
+            ch = answer[i]
             if ch == "[":
                 depth += 1
             elif ch == "]":
@@ -532,20 +536,20 @@ def _cited_ids(answer: str) -> list[tuple[str, tuple[int, int]]]:
                     end = i
                     break
                 depth -= 1
-            elif ch == "\n" or rest.startswith((" — ", " ("), i):
+            elif answer.startswith((" — ", " ("), i):
                 end = i
                 break
-            elif ch in ",;" and depth == 0 and _ID.match(rest[i + 1:].lstrip()):
+            elif ch in ",;" and depth == 0 and _ID.match(answer[i + 1:line_end].lstrip()):
                 end = i  # several ids in one bracket: [v1:schema/Pet, v1:operation/GET /pets]
                 break
-        name = rest[:end]
+        name = answer[start:end]
         where = re.search(r" [\w./-]+\.(?:ya?ml|json):\d+(?:-\d+)?$", name)
         if where:
             name = name[:where.start()]
         name = name.rstrip(" .,;:)")
-        end = match.end() + len(name)
+        end = start + len(name)
         if where:
-            end = match.end() + where.end()
+            end = start + where.end()
         out.append((f"{match.group(1)}:{match.group(2)}/{name}", (match.start(), end)))
     return out
 
@@ -593,7 +597,16 @@ def verify(answer: str, evidence, known=None, cover=None) -> Verification:
     """`cover`: comparisons or diffs whose breaking changes the answer must mention (they are evidence too).
     `known`: text, or names, the answer may repeat without the evidence holding them."""
     cover = list(cover or [])
-    ev = _Evidence(list(evidence) + [c for c in cover if not any(c is e for e in evidence)])
+    return _verify(answer, _Evidence(list(evidence) + [c for c in cover if not any(c is e for e in evidence)]),
+                   known, cover)
+
+
+def _prepared(evidence) -> "_Evidence":
+    """The evidence made ready once, for checking many answers against it with `_verify`: it is only read."""
+    return _Evidence(list(evidence))
+
+
+def _verify(answer: str, ev: "_Evidence", known=None, cover=()) -> Verification:
     known_words = set().union(*(_words_of(str(k)) for k in known)) if known else set()
     findings: list[Finding] = []
 
