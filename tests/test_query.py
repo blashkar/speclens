@@ -202,6 +202,19 @@ def test_search(shop):
     assert shop.search("zebra").to_text() == "no matches for 'zebra'"
 
 
+def test_a_spec_set_passes_every_filter_on(shop):
+    specs = SpecSet()
+    specs.add(shop)
+    ops = lambda r: [o.id for o in r.operations]  # noqa: E731
+    assert ops(specs.list_operations(method="delete")) == ops(shop.list_operations(method="delete")) == [
+        "v1:operation/DELETE /pets/{petId}"]
+    assert ops(specs.list_operations("v1", tag="pets")) == ops(shop.list_operations(tag="pets"))
+    assert len(specs.list_operations(tag="pets").operations) < len(specs.list_operations().operations)
+    hits = specs.search("pet", kinds={"operation"})
+    assert hits.hits and all(h.id.startswith("v1:operation/") for h in hits.hits)
+    assert [h.id for h in hits.hits] == [h.id for h in shop.search("pet", kinds={"operation"}).hits]
+
+
 def test_source(shop):
     r = shop.source_of("v1:field/Pet.name")
     assert r.text.strip() == "name: {type: string, description: The pet's name.}"
