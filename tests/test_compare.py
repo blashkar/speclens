@@ -1397,3 +1397,23 @@ def test_in_a_paired_operation_path_parameters_are_matched_by_their_place(write)
     # The path renamed, the parameter's declaration not: the rename is still said.
     assert changes(op("/pets/{id}", ("id", "string")), op("/pets/{petId}", ("id", "string"))) == [
         ("path-parameter-renamed", "parameter path petId", "id", "petId", "info")]
+
+
+def test_compare_a_field_whose_name_or_schema_name_holds_dots(write):
+    spec = """
+        paths: {}
+        components:
+          schemas:
+            Extra: {type: object, properties: {airline.leg.code: {type: string, maxLength: %d}}}
+            Pet.v2: {type: object, properties: {tag: {type: string, maxLength: %d}}}
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(spec % (5, 3)), "b/openapi.yaml": HEAD + dedent(spec % (9, 2))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    c = s.compare("Extra.airline.leg.code", "a", "b")  # no schema `Extra.airline.leg`: the field's own name
+    assert (c.what, c.a, [(x.kind, x.before, x.after) for x in c.changes]) == (
+        "field", "a:field/Extra.airline.leg.code", [("constraint-loosened", "maxLength 5", "maxLength 9")])
+    c = s.compare("Pet.v2.tag", "a", "b")  # a schema whose own name has a dot
+    assert (c.what, [(x.kind, x.before, x.after) for x in c.changes]) == (
+        "field", [("constraint-tightened", "maxLength 3", "maxLength 2")])
