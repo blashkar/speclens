@@ -457,3 +457,27 @@ def test_a_component_kept_in_another_file_is_named_as_the_component(spec):
     assert "v1:field/Pet.name" in s.graph.nodes
     # A file of parameters or headers holds parameters and headers, not schemas.
     assert "v1:parameter/limit" in s.graph.nodes
+
+
+def test_a_path_parameter_written_twice_in_one_path_is_warned_once(spec):
+    s = spec({"openapi.yaml": HEAD + dedent("""
+        paths:
+          /users/{id}/friends/{id}/{id}:
+            get:
+              parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+              responses: {'200': {description: ok}}
+          /users/{id}/friends/{friendId}:
+            get:
+              parameters:
+                - {name: id, in: path, required: true, schema: {type: string}}
+                - {name: friendId, in: path, required: true, schema: {type: string}}
+              responses: {'200': {description: ok}}
+        webhooks:
+          '{id}{id}':
+            post: {responses: {'200': {description: ok}}}
+        """)})
+    # Said once for the name, at the path; a path written once each, and a webhook's name, are not paths.
+    assert [(i.code, i.severity, i.line) for i in s.issues] == [("repeated-path-parameter", "warning", 5)]
+    assert s.issues[0].message == ("{id} is written 3 times in /users/{id}/friends/{id}/{id}: one parameter is one "
+                                   "value, so every place it is written takes the same value")
+    assert "GET /users/{id}/friends/{id}/{id}" in [n.name for n in s.graph.of_kind("operation")]
