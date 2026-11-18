@@ -1038,6 +1038,358 @@ def test_a_schema_kept_under_an_extension_key_is_named_like_a_component(write):
         ("description-changed", "response 200 application/json: dims")]
 
 
+def _schema_pair(write, a: str, b: str):
+    spec = """
+        paths:
+          /x:
+            post:
+              requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/X'}}}}
+              responses: {'200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/X'}}}}}
+        components:
+          schemas:
+            X: %s
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(spec % a), "b/openapi.yaml": HEAD + dedent(spec % b)})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    return [(c.kind, c.before, c.after) for c in s.compare("X", "a", "b").changes]
+
+
+def test_additional_properties_from_anything_to_a_schema_to_nothing(write):
+    obj = "{type: object, properties: {n: {type: string}}%s}"
+    cases = {
+        ("", ", additionalProperties: true"): [],  # absent and true allow the same
+        ("", ", additionalProperties: false"): [("constraint-tightened", "additionalProperties: anything",
+                                                 "additionalProperties: false")],
+        ("", ", additionalProperties: {type: string}"): [("constraint-tightened", "additionalProperties: anything",
+                                                          "additionalProperties: a schema")],
+        (", additionalProperties: {type: string}", ", additionalProperties: false"): [
+            ("constraint-tightened", "additionalProperties: a schema", "additionalProperties: false")],
+        (", additionalProperties: false", ", additionalProperties: {type: string}"): [
+            ("constraint-loosened", "additionalProperties: false", "additionalProperties: a schema")],
+        (", additionalProperties: false", ""): [
+            ("constraint-loosened", "additionalProperties: false", "additionalProperties: anything")],
+        (", additionalProperties: {type: string}", ", additionalProperties: {type: integer}"): [
+            ("type-changed", "string", "integer")],
+    }
+    for (a, b), want in cases.items():
+        assert _schema_pair(write, obj % a, obj % b) == want, (a, b)
+
+
+def test_items_unique_items_and_multiple_of_are_compared(write):
+    cases = {
+        ("{type: array}", "{type: array, items: {type: integer}}"): [
+            ("constraint-tightened", "no items", "items: a schema")],
+        ("{type: array, items: {type: integer}}", "{type: array}"): [
+            ("constraint-loosened", "items: a schema", "no items")],
+        ("{type: array, items: {type: string}}", "{type: array, uniqueItems: true, items: {type: string}}"): [
+            ("constraint-tightened", "uniqueItems false", "uniqueItems true")],
+        ("{type: number, multipleOf: 0.1}", "{type: number, multipleOf: 0.01}"): [
+            ("constraint-loosened", "multipleOf 0.1", "multipleOf 0.01")],
+        ("{type: number, multipleOf: 0.01}", "{type: number, multipleOf: 0.1}"): [
+            ("constraint-tightened", "multipleOf 0.01", "multipleOf 0.1")],
+        ("{type: integer, multipleOf: 2}", "{type: integer, multipleOf: 3}"): [
+            ("multiple-of-changed", "multipleOf 2", "multipleOf 3")],
+        ("{type: integer}", "{type: integer, multipleOf: 5}"): [
+            ("constraint-tightened", "multipleOf none", "multipleOf 5")],
+        ("{type: array, prefixItems: [{type: string}]}", "{type: array, prefixItems: [{type: string}, {type: integer}]}"): [
+            ("prefix-items-changed", "1 position", "2 positions")],
+    }
+    for (a, b), want in cases.items():
+        assert _schema_pair(write, a, b) == want, (a, b)
+
+
+def test_a_request_body_made_optional_and_a_parameter_written_otherwise(write):
+    op = """
+        paths:
+          /x:
+            post:
+              parameters:
+                - {name: ids, in: query, %s schema: {type: array, items: {type: string}}}
+                - {name: page, in: query, schema: {type: integer}}
+              requestBody: {required: %s, content: {application/json: {schema: {type: object}}}}
+              responses: {'200': {description: ok}}
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(op % ("", "true")),
+                  "b/openapi.yaml": HEAD + dedent(op % ("explode: false,", "false"))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    assert sorted((c.kind, c.where, c.before, c.after, c.level) for c in s.compare("POST /x", "a", "b").changes) == [
+        ("parameter-serialization-changed", "parameter query ids", "style form, explode true",
+         "style form, explode false", "breaking"),
+        ("required-removed", "request body", None, None, "info")]
+
+
+def test_items_or_values_on_one_side_of_a_field_written_inline(write):
+    field = "{type: object, properties: {n: %s}}"
+    assert _schema_pair(write, field % "{type: array}", field % "{type: array, items: {type: integer}}") == [
+        ("constraint-tightened", "no items", "items: a schema")]
+    assert _schema_pair(write, field % "{type: object, additionalProperties: {type: string}}",
+                        field % "{type: object}") == [
+        ("constraint-loosened", "additionalProperties: a schema", "additionalProperties: anything")]
+
+
+def test_a_single_value_is_sent_the_same_whatever_explode_says(write):
+    op = """
+        paths:
+          /x:
+            post:
+              parameters:
+                - {name: limit, in: query, %s schema: {type: integer}}
+                - {name: trace, in: header, %s schema: {type: integer}}
+                - {name: ids, in: query, %s schema: {type: array, items: {type: integer}}}
+                - {name: id, in: path, required: true, %s schema: {$ref: '#/components/schemas/Id'}}
+                - {name: sort, in: query, %s schema: {type: string}}
+              responses: {'200': {description: ok}}
+        components:
+          schemas:
+            Id: {type: integer}
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(op % ("", "", "", "", "")),
+                  "b/openapi.yaml": HEAD + dedent(op % ("explode: false,", "explode: true,", "explode: false,",
+                                                         "style: label,", "style: deepObject,"))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    assert sorted((c.kind, c.where, c.before, c.after, c.level) for c in s.compare("POST /x", "a", "b").changes) == [
+        ("parameter-serialization-changed", "parameter path id", "style simple, explode false",
+         "style label, explode false", "breaking"),
+        ("parameter-serialization-changed", "parameter query ids", "style form, explode true",
+         "style form, explode false", "breaking"),
+        ("parameter-style-undefined", "parameter query sort", "style form, explode true",
+         "style deepObject, explode false", "warning")]
+
+
+def test_not_if_then_else_and_dependent_schemas_are_compared(write):
+    obj = "{type: object, properties: {kind: {type: string}, n: {type: integer}}%s}"
+    cond = ", if: {properties: {kind: {const: a}}}, then: {required: [n]}"
+    cases = {
+        ("", cond): [("constraint-tightened", "no then", "then: a schema")],
+        (cond, ""): [("constraint-loosened", "then: a schema", "no then")],
+        (cond, cond + ", else: {required: [kind]}"): [("constraint-tightened", "no else", "else: a schema")],
+        (", then: {required: [n]}", cond): [("condition-changed", "no if", "if: a schema")],
+        (cond, cond.replace("const: a", "const: b")): [("condition-changed", "if: a schema", "if: another")],
+        (cond, ", if: {properties: {kind: {const: a}}, description: test}, then: {required: [n]}"): [],
+        (cond.replace("{required: [n]}", "{properties: {n: {maximum: 5}}}"),
+         cond.replace("{required: [n]}", "{properties: {n: {maximum: 4}}}")): [
+            ("constraint-tightened", "maximum 5", "maximum 4")],
+        ("", ", not: {required: [n]}"): [("constraint-tightened", "no not", "not: a schema")],
+        (", not: {required: [n]}", ""): [("constraint-loosened", "not: a schema", "no not")],
+        (", not: {required: [n]}", ", not: {required: [kind]}"): [
+            ("condition-changed", "not: a schema", "not: another")],
+        ("", ", dependentSchemas: {kind: {required: [n]}}"): [
+            ("constraint-tightened", "no dependentSchemas/kind", "dependentSchemas/kind: a schema")],
+        (", dependentSchemas: {kind: {properties: {n: {minimum: 0}}}}",
+         ", dependentSchemas: {kind: {properties: {n: {minimum: 1}}}}"): [
+            ("constraint-tightened", "minimum 0", "minimum 1")],
+        (", dependentSchemas: {kind: {required: [n]}}", ", dependentSchemas: {n: {required: [n]}}"): [
+            ("constraint-loosened", "dependentSchemas/kind: a schema", "no dependentSchemas/kind"),
+            ("constraint-tightened", "no dependentSchemas/n", "dependentSchemas/n: a schema")],
+        # written as booleans: `then: true` and `not: false` do nothing; `then: false` and `not: true` allow nothing
+        (", then: true", ""): [],
+        ("", ", not: false"): [],
+        ("", ", not: true"): [("constraint-tightened", "no not", "not: true")],
+        (", not: {required: [n]}", ", not: true"): [("constraint-tightened", "not: a schema", "not: true")],
+        (cond, cond.replace("{required: [n]}", "false")): [("constraint-tightened", "then: a schema", "then: false")],
+        (", dependentSchemas: {kind: false}", ", dependentSchemas: {kind: true}"): [
+            ("constraint-loosened", "dependentSchemas/kind: false", "dependentSchemas/kind: true")],
+        (cond, cond.replace("if: {properties: {kind: {const: a}}}", "if: true")): [
+            ("condition-changed", "if: a schema", "if: true")],
+    }
+    for (a, b), want in cases.items():
+        assert _schema_pair(write, obj % a, obj % b) == want, (a, b)
+
+
+def test_items_false_is_a_constraint(write):
+    arr = "{type: array, prefixItems: [{type: string}]%s}"
+    assert _schema_pair(write, arr % "", arr % ", items: false") == [
+        ("constraint-tightened", "items: anything", "items: false")]
+    assert _schema_pair(write, arr % ", items: false", arr % ", items: {type: string}") == [
+        ("constraint-loosened", "items: false", "items: a schema")]
+
+
+_SILENT = [  # (keyword written on a schema, and another value for it): each must give a line when added,
+    # removed or changed
+    ("not: {type: string}", "not: {type: integer}"),
+    ("if: {required: [a]}, then: {required: [b]}", "if: {required: [b]}, then: {required: [b]}"),
+    ("if: {required: [a]}, then: {required: [b]}", "if: {required: [a]}, then: {required: [a]}"),
+    ("if: {required: [a]}, else: {required: [b]}", "if: {required: [a]}, else: {required: [a]}"),
+    ("dependentSchemas: {a: {required: [b]}}", "dependentSchemas: {a: {required: [a]}}"),
+    ("not: true", "not: {type: string}"),
+    ("if: true, then: false", "if: false, then: false"),
+    ("dependentSchemas: {a: false}", "dependentSchemas: {a: {required: [a]}}"),
+    ("items: {type: string}", "items: {type: integer}"),
+    ("items: false", "items: {type: integer}"),
+    ("prefixItems: [{type: string}]", "prefixItems: [{type: integer}]"),
+    ("contains: {type: string}", "contains: {type: integer}"),
+    ("unevaluatedItems: {type: string}", "unevaluatedItems: false"),
+    ("additionalProperties: {type: string}", "additionalProperties: false"),
+    ("unevaluatedProperties: {type: string}", "unevaluatedProperties: false"),
+    ("additionalProperties: false", "additionalProperties: {type: string}"),
+    ("propertyNames: {maxLength: 3}", "propertyNames: {maxLength: 4}"),
+    ("patternProperties: {'^x': {type: string}}", "patternProperties: {'^x': {type: integer}}"),
+    ("multipleOf: 2", "multipleOf: 3"),
+    ("uniqueItems: true", "uniqueItems: false"),
+    ("const: 1", "const: 2"),
+    ("enum: [1]", "enum: [2]"),
+    ("pattern: '^a'", "pattern: '^b'"),
+    ("format: date", "format: uuid"),
+    ("maxLength: 3", "maxLength: 4"),
+    ("minItems: 1", "minItems: 2"),
+    ("maxProperties: 1", "maxProperties: 2"),
+    ("required: [a]", "required: [b]"),
+]
+# Not yet read: a field written inline with only `required: [names]` keeps the field's own required flag instead.
+_NOT_READ = {("{type: object, properties: {f: {%s}}}", "required: [a]")}
+
+
+def test_no_keyword_read_into_the_graph_changes_silently(write):
+    for x, y in _SILENT:
+        for where in ("{%s}", "{type: object, properties: {f: {%s}}}", "{type: array, items: {%s}}"):
+            if (where, x) in _NOT_READ:
+                continue
+            for a, b in ((x, ""), ("", x), (x, y)):
+                assert _schema_pair(write, where % a, where % b), (where, a, b)
+
+
+def test_a_requirement_is_compared_whether_or_not_its_name_is_declared(write):
+    spec = """
+        paths:
+          /x:
+            get:
+              responses: {'200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/X'}}}}}
+        components:
+          schemas:
+            X: {type: object, properties: {n: {type: string}}, dependentSchemas: {n: %s}}
+        """
+
+    def changes(a, b):
+        root = write({"a/openapi.yaml": HEAD + dedent(spec % a), "b/openapi.yaml": HEAD + dedent(spec % b)})
+        s = SpecSet()
+        s.load(root / "a/openapi.yaml", "a")
+        s.load(root / "b/openapi.yaml", "b")
+        return sorted((c.kind, c.where, c.level) for c in s.compare("GET /x", "a", "b").changes)
+
+    undeclared = "{required: [kind]}"
+    optional = "{properties: {kind: {maxLength: 3}}}"
+    required = "{properties: {kind: {maxLength: 3}}, required: [kind]}"
+    where = "response 200 application/json: dependentSchemas/n.kind"
+    assert changes(undeclared, optional) == [("field-added", where, "info"), ("required-removed", where, "breaking")]
+    assert changes(optional, undeclared) == [("field-removed", where, "info"), ("required-added", where, "info")]
+    assert changes(undeclared, required) == [("required-field-added", where, "info")]  # said once
+    assert changes("{type: object}", required) == [("required-field-added", where, "info")]
+    assert changes(required, "{type: object}") == [("required-field-removed", where, "breaking")]
+
+
+def test_const_and_enum_values_are_compared_as_the_json_values_they_are(write):
+    spec = """
+        paths: {}
+        components:
+          schemas:
+            Flag:
+              properties:
+                one: {const: %s}
+                some: {enum: %s}
+                same: {enum: [.nan, 2]}
+                list: {const: [0, %s]}
+        """
+    root = write({"a/openapi.yaml": HEAD + dedent(spec % ("1", "[1, 2]", "1")),
+                  "b/openapi.yaml": HEAD + dedent(spec % ("true", "[true, 2]", "true"))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    # 1 and true are different values; NaN is the same as NaN.
+    assert sorted((c.kind, c.where, c.before, c.after) for c in s.compare("Flag", "a", "b").changes) == [
+        ("const-changed", "list", "[0, 1]", "[0, True]"), ("const-changed", "one", "1", "True"),
+        ("enum-value-added", "some", None, "True"), ("enum-value-removed", "some", "1", None)]
+
+
+PATHS = """
+    paths:
+%s"""
+OP = """      /pets/{%s}/toys/{%s}:
+        get:
+          parameters:
+            - {name: %s, in: path, required: true, schema: {type: string%s}}
+            - {name: %s, in: path, required: true, schema: {type: integer}}
+          responses: {'200': {description: ok}}
+"""
+
+
+def _two(write, a: str, b: str):
+    root = write({"a/openapi.yaml": HEAD + dedent(PATHS % a), "b/openapi.yaml": HEAD + dedent(PATHS % b)})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    return s
+
+
+def test_a_path_parameter_renamed_is_the_same_operation(write):
+    s = _two(write, OP % ("id", "toy", "id", "", "toy"), OP % ("petId", "toy", "petId", ", maxLength: 5", "toy"))
+    d = s.diff("a", "b")
+    # Not removed and added: one operation, under its newer name, whose parameter is still compared.
+    assert (d.operations_added, d.operations_removed, list(d.operations_changed)) == (
+        [], [], ["GET /pets/{petId}/toys/{toy}"])
+    want = [("constraint-tightened", "parameter path petId", "maxLength none", "maxLength 5", "breaking"),
+            ("path-parameter-renamed", "parameter path petId", "id", "petId", "info")]
+    assert sorted((c.kind, c.where, c.before, c.after, c.level)
+                  for c in d.operations_changed["GET /pets/{petId}/toys/{toy}"]) == want
+    # Asked by either name, the same comparison.
+    for name in ("GET /pets/{id}/toys/{toy}", "GET /pets/{petId}/toys/{toy}"):
+        r = s.compare(name, "a", "b")
+        assert (r.name, r.a, r.b) == ("GET /pets/{petId}/toys/{toy}", "a:operation/GET /pets/{id}/toys/{toy}",
+                                      "b:operation/GET /pets/{petId}/toys/{toy}")
+        assert sorted((c.kind, c.where, c.before, c.after, c.level) for c in r.changes) == want
+    renamed = next(c for c in r.changes if c.kind == "path-parameter-renamed")
+    assert (renamed.a, renamed.b) == ("a:parameter/GET /pets/{id}/toys/{toy}#path/id",
+                                      "b:parameter/GET /pets/{petId}/toys/{toy}#path/petId")
+
+
+def test_operations_are_paired_by_path_shape_only_when_one_on_each_side_is_left(write):
+    a = OP % ("id", "toy", "id", "", "toy") + OP % ("name", "toy", "name", "", "toy")
+    s = _two(write, a, OP % ("petId", "toy", "petId", "", "toy"))
+    d = s.diff("a", "b")
+    # Two of that shape before, one after: which one it is cannot be told, so none is paired.
+    assert (d.operations_added, d.operations_removed) == (
+        ["GET /pets/{petId}/toys/{toy}"], ["GET /pets/{id}/toys/{toy}", "GET /pets/{name}/toys/{toy}"])
+    # The same name is matched first: the one left on each side is then paired.
+    s = _two(write, a, OP % ("id", "toy", "id", "", "toy") + OP % ("petName", "toy", "petName", "", "toy"))
+    d = s.diff("a", "b")
+    assert (d.operations_added, d.operations_removed, list(d.operations_changed)) == (
+        [], [], ["GET /pets/{petName}/toys/{toy}"])
+
+
+def test_in_a_paired_operation_path_parameters_are_matched_by_their_place(write):
+    def op(path, *params):
+        lines = "".join(f"            - {{name: {n}, in: path, required: true, schema: {{type: {t}}}}}\n"
+                        for n, t in params)
+        return f"      {path}:\n        get:\n          parameters:\n{lines}          responses: {{'200': {{description: ok}}}}\n"
+
+    def changes(a, b):
+        r = _two(write, a, b).diff("a", "b")
+        assert (r.operations_added, r.operations_removed) == ([], [])
+        [cs] = r.operations_changed.values()
+        return sorted((c.kind, c.where, c.before, c.after, c.level) for c in cs)
+
+    # Names swapped: each place is compared with itself, so its type changes are said.
+    assert changes(op("/a/{x}/b/{y}", ("x", "integer"), ("y", "string")),
+                   op("/a/{y}/b/{x}", ("x", "integer"), ("y", "string"))) == [
+        ("path-parameter-renamed", "parameter path x", "y", "x", "info"),
+        ("path-parameter-renamed", "parameter path y", "x", "y", "info"),
+        ("type-changed", "parameter path x", "string", "integer", "breaking"),
+        ("type-widened", "parameter path y", "integer", "string", "info")]
+    # A name moved along: two renames, nothing else changed.
+    assert changes(op("/a/{x}/b/{y}", ("x", "integer"), ("y", "string")),
+                   op("/a/{y}/b/{z}", ("y", "integer"), ("z", "string"))) == [
+        ("path-parameter-renamed", "parameter path y", "x", "y", "info"),
+        ("path-parameter-renamed", "parameter path z", "y", "z", "info")]
+    # The path renamed, the parameter's declaration not: the rename is still said.
+    assert changes(op("/pets/{id}", ("id", "string")), op("/pets/{petId}", ("id", "string"))) == [
+        ("path-parameter-renamed", "parameter path petId", "id", "petId", "info")]
+
+
 def test_compare_a_field_whose_name_or_schema_name_holds_dots(write):
     spec = """
         paths: {}
