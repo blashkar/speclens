@@ -4,6 +4,11 @@ JSON is read through the YAML parser, since JSON is valid YAML. Plain values are
 OpenAPI requires: `yes`, `no`, `on` and `off` are text, not booleans, and `010` is ten. (PyYAML follows YAML 1.1,
 so its own reading of those is not used.) Each value's lines are recorded by its JSON
 pointer, so code that walks the plain values can always find where something was written.
+
+One YAML 1.1 feature is kept, because hand-written specs use it: the merge key. `<<: *base` (or a list of
+mappings) fills in the keys of those mappings that the mapping does not write itself; an earlier mapping in the
+list wins over a later one, and a merged value's lines are where it was written. YAML 1.2 has no merge key and
+some tools will not read it, so each one is reported as a warning. A quoted "<<" is an ordinary key.
 """
 
 import re
@@ -229,16 +234,56 @@ def _convert(node, ptr: str, doc: Document, open_nodes: set, start: int | None =
                 end = max(end, e)
         else:
             value = {}
-            for key_node, value_node in node.value:
+            pairs, merged = _merged_pairs(node, doc, set())
+            for key_node, value_node in pairs:
                 key = key_node.value if isinstance(key_node, yaml.ScalarNode) else str(key_node.value)
                 if key in value:
+                    if key_node in merged:
+                        continue  # written in the mapping itself, or in an earlier merged one: that one is kept
                     doc.issues.append(Issue(WARNING, "duplicate-key", f"key {key!r} appears more than once; "
                                             "the last one is used", doc.name, key_node.start_mark.line + 1))
                 v, e = _convert(value_node, pointer.join(ptr, key), doc, open_nodes, key_node.start_mark.line + 1)
                 value[key] = v
-                end = max(end, e)
+                if key_node not in merged:
+                    end = max(end, e)  # a merged value is cited where it was written, not as part of this one
         if node.flow_style:
             end = _end_line(node.end_mark)
         open_nodes.discard(id(node))
     doc.lines[ptr] = (start, end)
     return value, end
+
+
+_MERGE = "tag:yaml.org,2002:merge"
+
+
+def _merged_pairs(node, doc: Document, seen: set) -> tuple[list, set]:
+    """A mapping's (key, value) nodes with `<<` merge keys read: its own pairs first, then those of the merged
+    mappings that it does not write itself, an earlier one first. With the key nodes that came from a merge."""
+    own, sources = [], []
+    for key_node, value_node in node.value:
+        # Only a plain `<<`: the resolver tags it a merge key; a quoted "<<" is text.
+        if isinstance(key_node, yaml.ScalarNode) and key_node.tag == _MERGE:
+            line = key_node.start_mark.line + 1
+            found = value_node.value if isinstance(value_node, yaml.SequenceNode) else [value_node]
+            if not found or not all(isinstance(m, yaml.MappingNode) for m in found):
+                doc.issues.append(Issue(WARNING, "yaml-merge-key", "a `<<` merge key takes a mapping or a list of "
+                                        "mappings; this one is ignored", doc.name, line))
+                continue
+            doc.issues.append(Issue(WARNING, "yaml-merge-key", "a `<<` merge key: the keys of the mappings it names "
+                                    "are read into this one (YAML 1.2 has no merge key; some tools will not read "
+                                    "it)", doc.name, line))
+            sources += found
+        else:
+            own.append((key_node, value_node))
+    merged: set = set()
+    if id(node) in seen:  # a mapping merged into itself, through aliases: its own pairs only
+        return own, merged
+    written = {k.value for k, _ in own if isinstance(k, yaml.ScalarNode)}
+    for source in sources:
+        pairs, _ = _merged_pairs(source, doc, seen | {id(node)})
+        for key_node, value_node in pairs:
+            if isinstance(key_node, yaml.ScalarNode) and key_node.value not in written:
+                written.add(key_node.value)
+                own.append((key_node, value_node))
+                merged.add(key_node)
+    return own, merged

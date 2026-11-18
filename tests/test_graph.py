@@ -259,6 +259,24 @@ def test_labels(spec, tmp_path):
         specs.load(tmp_path / "openapi.yaml", "2.2")
 
 
+def test_a_schema_built_with_a_merge_key_has_its_fields(spec):
+    s = spec({"openapi.yaml": HEAD + dedent("""
+        paths: {}
+        components:
+          schemas:
+            Base: {type: object, properties: &props {id: {type: string}, name: {type: string, maxLength: 5}}}
+            Dog:
+              type: object
+              properties:
+                <<: *props
+                name: {type: string, maxLength: 9}
+        """)})
+    r = s.get_schema("Dog")
+    assert [(f.name, f.limits) for f in r.fields] == [("name", {"maxLength": 9}), ("id", {})]
+    assert r.fields[1].where == "openapi.yaml:7"  # where `id` is written, in Base
+    assert codes(s) == ["yaml-merge-key"]
+
+
 def test_webhooks_are_operations(spec):
     s = spec({"openapi.yaml": HEAD + dedent("""
         webhooks:
