@@ -1579,7 +1579,8 @@ def _changed_thing(change: dict) -> set[str]:
             out.add(re.split(r"[./#]", str(change[key]).split("/", 1)[1])[-1])
     kind = change.get("kind", "")
     for key in ("before", "after"):  # a renamed or replaced schema, an added option, a renamed operationId
-        if change.get(key) and kind.startswith(("possibly-renamed", "option", "schema", "type-replaced", "operation-id")):
+        if change.get(key) and kind.startswith(("possibly-renamed", "option", "schema", "type-replaced", "operation-id",
+                                                "path-parameter")):
             out.add(str(change[key]))
     if where.startswith("security "):  # every scheme it names: "security A + B, C"
         out |= set(re.split(r"[\s,+]+", where[len("security "):])) - {""}
