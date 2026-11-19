@@ -1484,6 +1484,45 @@ def test_a_type_changed_to_an_array_of_it_is_said_once(write):
         ("type-replaced", "request application/json: n", "Id", "Ids")]
 
 
+def test_an_object_that_became_an_array_of_it_is_compared_with_its_items(write):
+    spec = """
+        paths:
+          /x:
+            post:
+              requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/Box'}}}}
+              responses: {'200': {description: ok}}
+        components:
+          schemas:
+            Item: {type: object, properties: {id: {type: string}, size: {type: integer}}}
+            Box: {type: object, properties: {n: %s}}
+        """
+    item = "{$ref: '#/components/schemas/Item'}"
+    inline = "{type: object, required: [id], properties: {id: {type: string}, x: {type: integer}}}"
+
+    def changes(a, b):
+        root = write({"a/openapi.yaml": HEAD + dedent(spec % a), "b/openapi.yaml": HEAD + dedent(spec % b)})
+        s = SpecSet()
+        s.load(root / "a/openapi.yaml", "a")
+        s.load(root / "b/openapi.yaml", "b")
+        return sorted((c.kind, c.where, c.before, c.after) for c in s.compare("Box", "a", "b").changes)
+
+    # A named schema put in another's place says its name; its fields went under the items, not away.
+    assert changes(item, "{type: array, items: %s}" % item) == [("type-changed", "n", "Item", "array of Item")]
+    assert changes("{type: array, items: %s}" % item, item) == [("type-changed", "n", "array of Item", "Item")]
+    # What changed inside is said under `[]`, the required list with it.
+    assert changes(inline, "{type: array, items: {type: object, properties: {id: {type: string}}}}") == [
+        ("field-removed", "n[].x", "integer", None), ("required-removed", "n[].id", None, None),
+        ("type-changed", "n", "object", "array of object")]
+    # An array of something else: the fields did go.
+    assert changes(item, "{type: array, items: {type: string}}") == [
+        ("field-removed", "n.id", "string", None), ("field-removed", "n.size", "integer", None),
+        ("type-changed", "n", "Item", "array of string")]
+    # The same schema in both specs says what it is.
+    assert _schema_pair(write, "{type: object, properties: {id: {type: string}}}",
+                        "{type: array, items: {type: object, properties: {id: {type: integer}}}}") == [
+        ("type-changed", "object", "array of object"), ("type-changed", "string", "integer")]
+
+
 def test_a_type_read_from_structure_is_compared_as_a_type(write):
     spec = """
         paths:

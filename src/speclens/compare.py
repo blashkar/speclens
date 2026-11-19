@@ -429,7 +429,15 @@ class _Comparer:
         out += [self.change("parent-added", "", None, p, sa.id, sb.id) for p in sorted(pb - pa)]
         out += [self.change("parent-removed", "", p, None, sa.id, sb.id) for p in sorted(pa - pb)]
         fa, fb = _fields(ga, sa), _fields(gb, sb)
-        out += self.required_names(sa.data, sb.data, _required_flags(fa), _required_flags(fb), "", sa.id, sb.id)
+        # An object that became an array of objects, or the reverse: its fields went under the items, not away.
+        # Compared with those items, below `[]`; the change of type is said once, as for any.
+        wrapped = _wrapped(ga, sa, gb, sb)
+        if wrapped:
+            fa, fb = {}, {}
+            kids += self.matched(*wrapped, "[]")[1]
+        else:
+            out += self.required_names(sa.data, sb.data, _required_flags(fa), _required_flags(fb), "", sa.id,
+                                       sb.id)
         options_a, options_b = ga.outgoing(sa.id, g.OPTION), gb.outgoing(sb.id, g.OPTION)
         if options_b and not options_a and not fb or options_a and not options_b and not fa:
             fa, fb = {}, {}  # restructured into (or out of) options: the options' comparison covers the fields
@@ -647,14 +655,23 @@ class _Comparer:
                 return out + parts
             if i is not None and not parts or i is None and stated_a and stated_b:
                 return out + parts
-        before = describe(self.ga, na) if len(stated_a) <= 1 else "|".join(sorted(stated_a))
-        after = describe(self.gb, nb) if len(stated_b) <= 1 else "|".join(sorted(stated_b))
+        before = self.described(self.ga, na, nb) if len(stated_a) <= 1 else "|".join(sorted(stated_a))
+        after = self.described(self.gb, nb, na) if len(stated_b) <= 1 else "|".join(sorted(stated_b))
         if before == after:  # read alike on both sides: not a change of type
             return out + parts
         if i is None:
             return out + [self.change("type-changed", where, before, after, na.id, nb.id)]
         out[i] = replace(out[i], before=before, after=after)
         return out
+
+    @staticmethod
+    def described(graph: Graph, node: Node, other: Node) -> str:
+        """A side of a change of type in a few words. A named object put in another schema's place says its
+        name, `Item -> array of Item`, as `object` would not; the same schema in both specs says what it is."""
+        text = describe(graph, node)
+        if text == "object" and node.data.get("named") and node.name != other.name:
+            return node.name
+        return text
 
     def annotations(self, fa: Node, ta: Node, fb: Node, tb: Node, where: str) -> tuple[list[Change], frozenset]:
         """A field's description, deprecated, readOnly, writeOnly and default as they apply, for those the field
@@ -1027,6 +1044,18 @@ def _option_types(graph: Graph, node: Node) -> set:
             return set()
         out |= t
     return out
+
+
+def _wrapped(ga: Graph, sa: Node, gb: Graph, sb: Node) -> tuple | None:
+    """(object, items) or (items, object) where one side is read as an object and the other as an array whose
+    `items` are read as one: what was one of them is now a list of them, or the reverse. Else None."""
+    for (g1, s1), (g2, s2), flip in (((ga, sa), (gb, sb), False), ((gb, sb), (ga, sa), True)):
+        items = [e for e in g2.outgoing(s2.id, g.ITEMS) if e.data.get("keyword") == "items"]
+        if items and read_types(g1, s1) == {"object"} and read_types(g2, s2) == {"array"} \
+                and read_types(g2, g2.nodes[items[0].target]) == {"object"}:
+            inner = g2.nodes[items[0].target]
+            return (inner, s1) if flip else (s1, inner)
+    return None
 
 
 def _structured(graph: Graph, node: Node) -> bool:
