@@ -128,6 +128,45 @@ def _scalar(data: dict) -> str:
     return text or "any"
 
 
+def stated_types(data: dict) -> set:
+    """The JSON Schema types a schema states, without null; a name that is not one of them is not a type."""
+    t = data.get("type")
+    out = set(t) if isinstance(t, list) else {t}
+    return {x for x in out if isinstance(x, str) and x in g.JSON_TYPES} - {"null"}
+
+
+def read_types(graph: Graph, node: Node, seen: frozenset = frozenset()) -> set:
+    """The types a schema is read as, without null: those it states, else what its structure makes it. `items`
+    makes an array; fields, an object; parents (allOf) and no fields, what all of them are read as, where any
+    is; options, theirs, when every option has one. A field or parameter is read as its type. Empty when
+    nothing says, or when the parents say different things."""
+    if node.id in seen:
+        return set()
+    seen |= {node.id}
+    if stated_types(node.data):
+        return stated_types(node.data)
+    kind = g.FIELD_TYPE if node.kind == g.FIELD else g.PARAM_TYPE if node.kind == g.PARAMETER else None
+    if kind:
+        edges = graph.outgoing(node.id, kind)
+        return read_types(graph, graph.nodes[edges[0].target], seen) if edges else set()
+    if any(e.data.get("keyword") == "items" for e in graph.outgoing(node.id, g.ITEMS)):
+        return {"array"}
+    fields, parents = graph.outgoing(node.id, g.HAS_FIELD), graph.outgoing(node.id, g.INHERITS)
+    if fields:
+        return {"object"}
+    options = graph.outgoing(node.id, g.OPTION)
+    if options:
+        out: set = set()
+        for e in options:
+            t = read_types(graph, graph.nodes[e.target], seen)
+            if not t:
+                return set()
+            out |= t
+        return out
+    known = [t for t in (read_types(graph, graph.nodes[e.target], seen) for e in parents) if t]
+    return set.intersection(*known) if known else set()
+
+
 def describe(graph: Graph, node: Node, depth: int = 0, name_refs: bool = False) -> str:
     """A type in a few words: `string (date)`, `Pet`, `array of Tag`, `one of Cat | Dog`, `object`.
     `name_refs`: a field or parameter whose type is a named schema says its name too: `Coordinates`,
@@ -159,6 +198,10 @@ def describe(graph: Graph, node: Node, depth: int = 0, name_refs: bool = False) 
         return describe(graph, graph.nodes[parents[0].target], depth + 1)
     if node.data.get("named") and depth == 0:
         return _scalar(node.data) if not has_fields else (node.data.get("type") or "object")
+    if parents and not has_fields:  # allOf of strings is a string: what they all are, where that is known
+        read = read_types(graph, node)
+        if read and read != {"object"}:
+            return "|".join(sorted(read))
     if has_fields or parents:
         return "object"
     return _scalar(node.data)

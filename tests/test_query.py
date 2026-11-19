@@ -1009,3 +1009,22 @@ def test_names_in_any_script_have_keys_of_their_own(write):
     from speclens.text import key
     assert [key(t) for t in ("Pet Store", "pet_store", "PetStore", "HTTPError_code2", "名前", "Café", "$")] == \
         ["petstore", "petstore", "petstore", "httperrorcode2", "名前", "café", ""]
+
+
+def test_a_field_made_of_several_parents_is_described_as_what_they_all_are(spec):
+    s = spec({"openapi.yaml": HEAD + dedent("""
+        paths: {}
+        components:
+          schemas:
+            Str: {type: string, maxLength: 9}
+            Code: {type: string, pattern: '^[A-Z]+$'}
+            Item: {type: object, properties: {a: {type: string}}}
+            X:
+              type: object
+              properties:
+                f: {allOf: [{$ref: '#/components/schemas/Str'}, {$ref: '#/components/schemas/Code'}]}
+                g: {allOf: [{$ref: '#/components/schemas/Str'}, {$ref: '#/components/schemas/Item'}]}
+        """)})
+    rows = {f.name: f.type for f in s.get_schema("X").fields}
+    assert rows["f"].startswith("string")  # both parents are strings
+    assert rows["g"].startswith("object")  # one has fields

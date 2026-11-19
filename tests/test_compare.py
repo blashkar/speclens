@@ -1482,3 +1482,55 @@ def test_a_type_changed_to_an_array_of_it_is_said_once(write):
         ("type-changed", "parameter query q", "integer", "array of integer"),
         ("type-changed", "request application/json: n", "integer", "array of integer"),
         ("type-replaced", "request application/json: n", "Id", "Ids")]
+
+
+def test_a_type_read_from_structure_is_compared_as_a_type(write):
+    spec = """
+        paths:
+          /x:
+            post:
+              requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/X'}}}}
+              responses: {'200': {description: ok}}
+        components:
+          schemas:
+            Item: {type: object, properties: {a: {type: string}}}
+            Str: {type: string, maxLength: 9}
+            Code: {type: string, pattern: '^[A-Z]+$'}
+            X: {type: object, properties: {n: %s}}
+        """
+
+    def changes(a, b):
+        root = write({"a/openapi.yaml": HEAD + dedent(spec % a), "b/openapi.yaml": HEAD + dedent(spec % b)})
+        s = SpecSet()
+        s.load(root / "a/openapi.yaml", "a")
+        s.load(root / "b/openapi.yaml", "b")
+        return sorted((c.kind, c.before, c.after, c.level) for c in s.compare("POST /x", "a", "b").changes)
+
+    # No `type` written on one side: what it is read as (`items`: an array; fields or a parent: an object;
+    # options: theirs) is its type, and a change to one with nothing in common is a type change.
+    assert changes("{type: integer}", "{items: {type: integer}}") == [
+        ("type-changed", "integer", "array of integer", "breaking")]
+    assert changes("{oneOf: [{type: string}, {type: integer}]}", "{type: array, items: {type: string}}") == [
+        ("options-dropped", "oneOf/0, oneOf/1", None, "warning"),
+        ("type-changed", "one of string | integer", "array of string", "breaking")]
+    assert changes("{allOf: [{$ref: '#/components/schemas/Item'}]}", "{type: integer}") == [
+        ("type-changed", "object", "integer", "breaking")]
+    assert ("type-changed", "object", "array of string", "breaking") in changes(
+        "{properties: {a: {type: string}}}", "{type: array, items: {type: string}}")
+    # The same type, written or read: no change. Nothing to read it from: not compared.
+    for a, b in (("{properties: {a: {type: string}}}", "{type: object, properties: {a: {type: string}}}"),
+                 ("{items: {type: integer}}", "{type: array, items: {type: integer}}"),
+                 ("{allOf: [{$ref: '#/components/schemas/Item'}]}", "{$ref: '#/components/schemas/Item'}"),
+                 ("{oneOf: [{type: string}, {type: integer}]}", "{type: [string, integer]}"),
+                 ("{description: d}", "{type: integer, description: d}"),
+                 ("{allOf: [{$ref: '#/components/schemas/Str'}, {$ref: '#/components/schemas/Code'}]}",
+                  "{type: string}"),
+                 # `label` is not a JSON type: what the schema is read as comes from what else it says
+                 ("{allOf: [{$ref: '#/components/schemas/Item'}]}",
+                  "{allOf: [{$ref: '#/components/schemas/Item', type: label}]}")):
+        assert not [c for c in changes(a, b) if c[0].startswith("type")], (a, b)
+    # but a `type` written on both sides is compared as written, JSON type or not
+    assert changes("{type: string}", "{type: label}") == [("type-changed", "string", "label", "breaking")]
+    # allOf of two strings is a string, not an object
+    assert changes("{allOf: [{$ref: '#/components/schemas/Str'}, {$ref: '#/components/schemas/Code'}]}",
+                   "{type: integer}") == [("type-changed", "string", "integer", "breaking")]
