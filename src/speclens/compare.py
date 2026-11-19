@@ -655,23 +655,20 @@ class _Comparer:
                 return out + parts
             if i is not None and not parts or i is None and stated_a and stated_b:
                 return out + parts
-        before = self.described(self.ga, na, nb) if len(stated_a) <= 1 else "|".join(sorted(stated_a))
-        after = self.described(self.gb, nb, na) if len(stated_b) <= 1 else "|".join(sorted(stated_b))
+        before = describe(self.ga, na) if len(stated_a) <= 1 else "|".join(sorted(stated_a))
+        after = describe(self.gb, nb) if len(stated_b) <= 1 else "|".join(sorted(stated_b))
         if before == after:  # read alike on both sides: not a change of type
             return out + parts
+        # A named object put in another schema's place says its name, `Item -> array of Item`, as `object` would
+        # not; the same schema in both specs says what it is.
+        if before == "object" and na.data.get("named") and na.name != nb.name:
+            before = na.name
+        if after == "object" and nb.data.get("named") and nb.name != na.name:
+            after = nb.name
         if i is None:
             return out + [self.change("type-changed", where, before, after, na.id, nb.id)]
         out[i] = replace(out[i], before=before, after=after)
         return out
-
-    @staticmethod
-    def described(graph: Graph, node: Node, other: Node) -> str:
-        """A side of a change of type in a few words. A named object put in another schema's place says its
-        name, `Item -> array of Item`, as `object` would not; the same schema in both specs says what it is."""
-        text = describe(graph, node)
-        if text == "object" and node.data.get("named") and node.name != other.name:
-            return node.name
-        return text
 
     def annotations(self, fa: Node, ta: Node, fb: Node, tb: Node, where: str) -> tuple[list[Change], frozenset]:
         """A field's description, deprecated, readOnly, writeOnly and default as they apply, for those the field

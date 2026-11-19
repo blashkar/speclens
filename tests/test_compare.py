@@ -1523,6 +1523,30 @@ def test_an_object_that_became_an_array_of_it_is_compared_with_its_items(write):
         ("type-changed", "object", "array of object"), ("type-changed", "string", "integer")]
 
 
+def test_a_named_object_says_its_name_only_where_the_two_sides_read_differently(write):
+    spec = """
+        paths:
+          /x:
+            post:
+              requestBody: {content: {application/json: {schema: %s}}}
+              responses: {'200': {description: ok}}
+        components:
+          schemas:
+            Item: {properties: {id: {type: string}}}
+            Box: {type: object, properties: {n: %s}}
+        """
+    item, label = "{$ref: '#/components/schemas/Item'}", "{$ref: '#/components/schemas/Item', type: label}"
+    # Item states no type: read as an object, as is its $ref with a type JSON Schema does not have beside it.
+    # Both read `object`: no change of type, though one side is a named schema and the other is not.
+    for a, b, name in (((item, item), (label, item), "POST /x"),  # the request body
+                       ((item, item), (item, label), "Box")):  # a field
+        root = write({"a/openapi.yaml": HEAD + dedent(spec % a), "b/openapi.yaml": HEAD + dedent(spec % b)})
+        s = SpecSet()
+        s.load(root / "a/openapi.yaml", "a")
+        s.load(root / "b/openapi.yaml", "b")
+        assert [c.kind for c in s.compare(name, "a", "b").changes] == ["parent-added"], name
+
+
 def test_a_type_read_from_structure_is_compared_as_a_type(write):
     spec = """
         paths:
