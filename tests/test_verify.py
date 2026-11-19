@@ -550,12 +550,14 @@ def test_required_said_of_a_field_where_it_is_named_in_other_words(write):
         "the evidence shows Owner.tag (through Pet.owner) required in 1.0"]
     # A parameter named with its operation.
     for claim, detail in (("`limit` on GET /pets is required.", "limit on GET /pets optional"),
-                          ("`region` in the `GET /pets` operation is optional.", "region on GET /pets required")):
+                          ("`region` in the `GET /pets` operation is optional.", "region on GET /pets required"),
+                          ("The `limit` query parameter on GET /pets is required.", "limit on GET /pets optional")):
         assert found(claim) == [f"the evidence shows {detail} in 1.0"], claim
     # True claims, and words for a schema that are not a field: nothing found.
     for claim in ("`tag` in the Pet schema is optional.", "`tag` inside the Owner model is required.",
                   "`tag` of `Pet.owner` is required.", "`limit` on GET /pets is optional.",
-                  "`region` on GET /pets is required.", "The Pet schema is required.",
+                  "`region` on GET /pets is required.", "The `limit` parameter on GET /pets is optional.",
+                  "`limit` sorted on GET /pets is required.", "The Pet schema is required.",
                   "Look up `tag` in Pet; Owner is required.", "`limit` in the query is required."):
         assert found(claim) == [], claim
     # Without the Owner schema in the evidence, what `Pet.owner` is is not known: not checked.
