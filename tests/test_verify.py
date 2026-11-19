@@ -515,6 +515,53 @@ def test_required_or_optional_claims_against_the_evidence(pets):
     assert verify("Required parameter added: `region`.", c).ok
 
 
+def test_required_said_of_a_field_where_it_is_named_in_other_words(write):
+    root = write({"openapi.yaml": HEAD + dedent("""
+        paths:
+          /pets:
+            get:
+              parameters:
+                - {name: limit, in: query, schema: {type: integer}}
+                - {name: region, in: query, required: true, schema: {type: string}}
+              responses: {'200': {description: ok}}
+        components:
+          schemas:
+            Pet:
+              required: [id]
+              properties: {id: {type: string}, tag: {type: string}, owner: {$ref: '#/components/schemas/Owner'}}
+            Owner:
+              required: [tag]
+              properties: {tag: {type: string}, name: {type: string}}
+        """)})
+    s = SpecSet()
+    s.load(root / "openapi.yaml", "1.0")
+    evidence = [s.get_schema("Pet"), s.get_schema("Owner"), s.get_operation("GET /pets")]
+
+    def found(claim):
+        return [f.detail for f in verify(claim, evidence).findings]
+
+    # A word for the schema after its name: "in the Pet schema", "inside the Owner model".
+    for claim, detail in (("`tag` in the Pet schema is required.", "Pet.tag optional"),
+                          ("`tag` inside the Owner model is optional.", "Owner.tag required"),
+                          ("The `tag` field in the Pet schema is required.", "Pet.tag optional")):
+        assert found(claim) == [f"the evidence shows {detail} in 1.0"], claim
+    # A field of a field: what is said is of the schema that field is, not of the field.
+    assert found("`tag` of `Pet.owner` is optional.") == [
+        "the evidence shows Owner.tag (through Pet.owner) required in 1.0"]
+    # A parameter named with its operation.
+    for claim, detail in (("`limit` on GET /pets is required.", "limit on GET /pets optional"),
+                          ("`region` in the `GET /pets` operation is optional.", "region on GET /pets required")):
+        assert found(claim) == [f"the evidence shows {detail} in 1.0"], claim
+    # True claims, and words for a schema that are not a field: nothing found.
+    for claim in ("`tag` in the Pet schema is optional.", "`tag` inside the Owner model is required.",
+                  "`tag` of `Pet.owner` is required.", "`limit` on GET /pets is optional.",
+                  "`region` on GET /pets is required.", "The Pet schema is required.",
+                  "Look up `tag` in Pet; Owner is required.", "`limit` in the query is required."):
+        assert found(claim) == [], claim
+    # Without the Owner schema in the evidence, what `Pet.owner` is is not known: not checked.
+    assert verify("`tag` of `Pet.owner` is optional.", [s.get_schema("Pet")]).ok
+
+
 def test_cover_counts_values_unwrapping_and_headers_in_words(write):
     def spec(types, item, header):
         return HEAD + dedent(f"""
