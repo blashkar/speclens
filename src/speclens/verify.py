@@ -227,6 +227,7 @@ class _Evidence:
         self.operations: dict[str, set[str]] = {}  # label -> operations shown to exist there
         self.methods: dict[tuple[str, str], set[str]] = {}  # (label, path) -> all the methods it has
         self.types: dict[str, set[str]] = {}  # field or parameter name -> the types its rows show
+        self.types_in: dict[tuple[str, str], set[str]] = {}  # (schema, field) -> the same
         self._anywhere: set[str] | None = None
         self.owners: dict[str, str] = {}  # field id -> the schema holding it, from results giving the field's name
         for item in items:
@@ -308,6 +309,9 @@ class _Evidence:
     def add_required(self, d: dict):
         """Whether each field and parameter in a result is required, in the version its id names."""
         owner = d.get("name") if isinstance(d.get("fields"), list) else None
+        # an operation's parameters, held by it: "`limit` on GET /pets"
+        operation = _operation(d["method"], d["path"]) if isinstance(d.get("method"), str) and \
+            isinstance(d.get("path"), str) else None
         stack = [(d, None)]
         while stack:
             v, holder = stack.pop()
@@ -316,7 +320,8 @@ class _Evidence:
                         _ID.match(str(v.get("id", ""))):
                     self.mark_required(str(v["id"]).split(":", 1)[0], v["name"], v["required"], holder)
                 for k, x in v.items():
-                    stack.append((x, owner if k == "fields" and v is d else holder))
+                    stack.append((x, owner if k == "fields" and v is d else
+                                  operation if k == "parameters" and v is d else holder))
             elif isinstance(v, (list, tuple)):
                 stack.extend((x, holder) for x in v)
 
@@ -337,6 +342,9 @@ class _Evidence:
                 if isinstance(v.get("name"), str) and isinstance(v.get("type"), str) and \
                         _ID.match(str(v.get("id", ""))):
                     self.types.setdefault(v["name"], set()).add(v["type"])
+                    if ":field/" in str(v["id"]):
+                        owner = self.owner_of(str(v["id"]), str(v["id"]).split("/", 1)[1])
+                        self.types_in.setdefault((owner, v["name"]), set()).add(v["type"])
                 stack.extend(v.values())
             elif isinstance(v, (list, tuple)):
                 stack.extend(v)
@@ -918,7 +926,13 @@ def _check_required(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
             labels = _labels_in(clause, ev.labels) or (in_sentence if len(in_sentence) == 1 else []) or \
                 ([section] if section else [])
             for subject in [_path_name(heading)] if flag else _required_subjects(clause):
-                owner, member = _member(subject)
+                # a parameter and its operation, apart: a parameter's name may hold dots (`$.xgafv`)
+                owner, member = subject.split("\x00") if "\x00" in subject else _member(subject)
+                held = _held_by(ev, owner)
+                if held != owner:  # `tag` of `Pet.owner`: the field of the schema Pet.owner is
+                    owner, subject = held, f"{held}.{member} (through {owner})"
+                elif " " in owner:  # a parameter of an operation
+                    subject = f"{member} on {owner}"
                 shown = ev.required_in.get((owner, member)) if owner else ev.required.get(subject)
                 if not shown:
                     continue
@@ -960,11 +974,27 @@ _NOT_REQUIRED_SUBJECT = _FUNCTION | {"since", "until", "after", "before", "durin
                                      "over", "between", "across", "whenever", "while"}
 
 
+def _held_by(ev: "_Evidence", owner: str) -> str:
+    """The schema a dotted owner is: `Pet.owner` is the field owner of Pet, whose type, where the evidence shows
+    one schema for it, holds what is said of. Else the owner as written."""
+    if "." not in owner or " " in owner or owner in ev.schemas:
+        return owner
+    types = ev.types_in.get(_member(owner)) or set()
+    return next(iter(types)) if len(types) == 1 and next(iter(types)) in ev.schemas else owner
+
+
 def _required_subjects(clause: str) -> list[str]:
     """The names "required" or "optional" is said of: right before it ("`limit` is optional") or right after
     it ("a required `limit` parameter"), with only words like "is", "a", "parameter" between. Not the path of an
-    operation named beside it."""
-    text = re.sub(r"\b(?:GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE|QUERY)\s+/\S*|(?<![\w`])/[\w{}/.-]*", " ", clause)
+    operation named beside it, which is where a parameter is: "`limit` on GET /pets is optional" is said of
+    limit there, given as the operation and the name with a NUL between."""
+    operations = []
+
+    def hold(m):  # an operation, kept as a mark no name is read from
+        operations.append(_operation(m.group(1), m.group(2)))
+        return f" \x00{len(operations) - 1}\x00 "
+    text = _NAMED_OPERATION.sub(hold, clause)
+    text = re.sub(r"\b(?:GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE|QUERY)\s+/\S*|(?<![\w`])/[\w{}/.-]*", " ", text)
     out = []
     code = [(m.start(), m.end(), _path_name(m.group(1))) for m in _CODE.finditer(text)]
     names = sorted(code + [(m.start(), m.end(), m.group(0)) for m in _IDENT.finditer(_CODE.sub(
@@ -976,13 +1006,47 @@ def _required_subjects(clause: str) -> list[str]:
         after = [n for n in names if n[0] >= q.end()]
         for side, near, gap in (("before", before[-1:], lambda n: text[n[1]:q.start()]),
                                 ("after", after[:1], lambda n: text[q.end():n[0]])):
-            if near and all(w.lower() in _TIES for w in re.findall(r"[A-Za-z']+", gap(near[0]))):
+            if not near:
+                continue
+            between = re.findall(r"[A-Za-z']+", gap(near[0]))
+            if side == "before":
+                held = _OPERATION_AFTER.fullmatch(gap(near[0]))
+                if held and all(w.lower() in _TIES for w in re.findall(r"[A-Za-z']+", held.group(2))):
+                    out.append(f"{operations[int(held.group(1))]}\x00{near[0][2]}")  # `limit` on GET /pets
+                    continue
+                # `tag` in the Pet schema, inside the Owner model: said of Pet.tag, Owner.tag only
+                kind, owner = None, near[0]
+                if between and between[0].lower() in _OWNER_KINDS:  # "object", a tie, is not read as a name
+                    kind, between = between[0], between[1:]
+                elif near[0] not in code and near[0][2].lower() in _OWNER_KINDS and len(before) > 1 \
+                        and not text[before[-2][1]:near[0][0]].strip():
+                    kind, owner = near[0][2], before[-2]
+                elif near[0] not in code and near[0][2].lower() in _OWNER_KINDS and \
+                        (word := re.search(r"([\w$@-]+)`?\s+$", text[:near[0][0]])) and \
+                        word.group(1).lower() not in _TIES | {"in", "of", "on", "inside", "within"}:
+                    continue  # "the Version schema is required": a word for a schema, not a field named so
+                if kind:
+                    owned = _owned(text, names, owner)
+                    if owned != owner[2] and all(w.lower() in _TIES for w in between):
+                        out.append(owned)
+                    continue
+            if all(w.lower() in _TIES for w in between):
                 if side == "after" and near[0] not in code and near[0][2].lower() in _REQUIREDNESS:
                     following = re.match(r"\W*([A-Za-z]+)", text[near[0][1]:])
                     if not following or following.group(1).lower() not in _KIND_WORDS:
                         continue  # "the required status changed": being required, not a field
                 out.append(_owned(text, names, near[0]) if side == "before" else near[0][2])
     return list(dict.fromkeys(out))
+
+
+# A parameter's operation between it and "required": "`limit` on GET /pets is", "`limit` in the GET /pets
+# operation is"
+_OPERATION_AFTER = re.compile(r"\s*(?:in|of|on|for)\s+(?:the\s+)?(?:operation\s+|endpoint\s+)?`?\s*\x00(\d+)\x00"
+                              r"\s*`?(\s+[A-Za-z' ]*)", re.I)
+# An operation, with the word for it after it if any: "GET /pets operation"
+_NAMED_OPERATION = re.compile(rf"{_OPERATION.pattern}(?:`?\s+(?:operation|endpoint|call)\b)?")
+# Words for what a schema is, said after its name: "`tag` in the Pet schema", "inside the Owner model"
+_OWNER_KINDS = {"schema", "model", "object", "type", "component", "class", "record", "entity"}
 
 
 _OWNER_BEFORE = re.compile(r"\b(?:in|of|on|inside|within)\s+(?:the\s+|an?\s+)?(?:schema\s+|object\s+|model\s+)?$",
@@ -994,9 +1058,10 @@ def _owned(text: str, names: list, near: tuple) -> str:
     required" and "the `tag` field of Pet is optional" are said of Pet.tag, not of Pet."""
     i = names.index(near)
     owner = _OWNER_BEFORE.search(text[:near[0]])
-    if i == 0 or not owner or "." in near[2]:
+    # the name before the word saying where ("inside" may be read as a name itself)
+    field = next((n for n in reversed(names[:i]) if owner and n[1] <= owner.start()), None)
+    if not field:
         return near[2]
-    field = names[i - 1]
     if not all(w.lower() in _TIES for w in re.findall(r"[A-Za-z']+", text[field[1]:owner.start()])):
         return near[2]
     return f"{near[2]}.{field[2]}"
