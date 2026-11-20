@@ -1045,14 +1045,32 @@ def _option_types(graph: Graph, node: Node) -> set:
 
 def _wrapped(ga: Graph, sa: Node, gb: Graph, sb: Node) -> tuple | None:
     """(object, items) or (items, object) where one side is read as an object and the other as an array whose
-    `items` are read as one: what was one of them is now a list of them, or the reverse. Else None."""
+    `items` are read as one, and the two are the same thing: what was one of them is now a list of them, or the
+    reverse. Else None."""
     for (g1, s1), (g2, s2), flip in (((ga, sa), (gb, sb), False), ((gb, sb), (ga, sa), True)):
         items = [e for e in g2.outgoing(s2.id, g.ITEMS) if e.data.get("keyword") == "items"]
         if items and read_types(g1, s1) == {"object"} and read_types(g2, s2) == {"array"} \
-                and read_types(g2, g2.nodes[items[0].target]) == {"object"}:
+                and read_types(g2, g2.nodes[items[0].target]) == {"object"} \
+                and _same_thing(g1, s1, g2, g2.nodes[items[0].target]):
             inner = g2.nodes[items[0].target]
             return (inner, s1) if flip else (s1, inner)
     return None
+
+
+def _same_thing(g1: Graph, obj: Node, g2: Graph, item: Node) -> bool:
+    """Whether an object and an array's items are one thing: the same named schema, or at least half their
+    fields in common.
+    An object holding a list of those items in a field of its own (`{pets: [Pet], next}` for `[Pet]`) wraps the
+    list; it is not one of them."""
+    for f, _ in _fields(g1, obj).values():
+        for e in g1.outgoing(f.id, g.FIELD_TYPE):
+            inner = [x for x in g1.outgoing(e.target, g.ITEMS) if x.data.get("keyword") == "items"]
+            if inner and g1.nodes[inner[0].target].name == item.name:
+                return False
+    if obj.data.get("named") and item.data.get("named") and obj.name == item.name:
+        return True
+    fa, fb = set(_fields(g1, obj)), set(_fields(g2, item))
+    return bool(fa | fb) and 2 * len(fa & fb) >= len(fa | fb)
 
 
 def _structured(graph: Graph, node: Node) -> bool:
