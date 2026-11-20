@@ -125,8 +125,10 @@ _WORDING = {
     "options-introduced-compatible": "options introduced (one accepts all the old schema did)", "required-field-removed": "required field removed",
 }
 # keyword -> True if a larger value allows more
-_LIMITS = {"maxLength": True, "maxItems": True, "maxProperties": True,
-           "minLength": False, "minItems": False, "minProperties": False}
+_LIMITS = {"maxLength": True, "maxItems": True, "maxProperties": True, "maxContains": True,
+           "minLength": False, "minItems": False, "minProperties": False, "minContains": False}
+# What a limit is when not written, where that is not "none": `contains` matches at least one item.
+_LIMIT_DEFAULTS = {"minContains": 1}
 
 
 def _bound(d: dict, side: str) -> tuple | None:
@@ -356,7 +358,7 @@ class _Comparer:
         elif isinstance(ea, list) and eb is None:
             out.append(self.change("constraint-loosened", where, f"enum of {len(ea)}", "any value", a, b))
         for k, larger_allows_more in _LIMITS.items():
-            va, vb = da.get(k), db.get(k)
+            va, vb = da.get(k, _LIMIT_DEFAULTS.get(k)), db.get(k, _LIMIT_DEFAULTS.get(k))
             if va == vb or not all(isinstance(v, (int, float)) or v is None for v in (va, vb)):
                 continue
             if va is None:
@@ -383,6 +385,14 @@ class _Comparer:
             out.append(self.change("constraint-tightened" if db.get("uniqueItems") else "constraint-loosened", where,
                                    f"uniqueItems {str(bool(da.get('uniqueItems'))).lower()}",
                                    f"uniqueItems {str(bool(db.get('uniqueItems'))).lower()}", a, b))
+        # dependentRequired: a field given makes others required. A pair added tightens, one removed loosens.
+        pairs_a, pairs_b = _dependencies(da), _dependencies(db)
+        for given, needed in sorted(pairs_b - pairs_a):
+            out.append(self.change("constraint-tightened", where, "no dependency",
+                                   f"dependentRequired: {given} requires {needed}", a, b))
+        for given, needed in sorted(pairs_a - pairs_b):
+            out.append(self.change("constraint-loosened", where, f"dependentRequired: {given} requires {needed}",
+                                   "no dependency", a, b))
         kind = _multiple_of(da.get("multipleOf"), db.get("multipleOf"))
         if kind:
             out.append(self.change(kind, where, f"multipleOf {_show(da.get('multipleOf'))}",
@@ -1206,6 +1216,12 @@ def _edge_key(e) -> str:
 def _required_flags(fields: dict) -> dict:
     """{name: required} for the fields _fields gives."""
     return {n: e.data["required"] for n, (_, e) in fields.items()}
+
+
+def _dependencies(data: dict) -> set[tuple[str, str]]:
+    """dependentRequired as (field given, field it makes required) pairs."""
+    value = data.get("dependentRequired")
+    return {(k, n) for k, names in value.items() for n in _names(names)} if isinstance(value, dict) else set()
 
 
 def _names(value) -> list:
