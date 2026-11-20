@@ -1011,8 +1011,9 @@ def _required_subjects(clause: str) -> list[str]:
             between = re.findall(r"[A-Za-z']+", gap(near[0]))
             if side == "before":
                 held = _OPERATION_AFTER.fullmatch(gap(near[0]))
-                if held and all(w.lower() in _TIES for w in re.findall(r"[A-Za-z']+", held.group(2))):
-                    out.append(f"{operations[int(held.group(1))]}\x00{near[0][2]}")  # `limit` on GET /pets
+                said = held and re.findall(r"[A-Za-z']+", f"{held.group(1)} {held.group(3)}")
+                if held and all(w.lower() in _TIES for w in said):
+                    out.append(f"{operations[int(held.group(2))]}\x00{near[0][2]}")  # `limit` on GET /pets
                     continue
                 # `tag` in the Pet schema, inside the Owner model: said of Pet.tag, Owner.tag only
                 kind, owner = None, near[0]
@@ -1040,9 +1041,9 @@ def _required_subjects(clause: str) -> list[str]:
 
 
 # A parameter's operation between it and "required": "`limit` on GET /pets is", "`limit` in the GET /pets
-# operation is"
-_OPERATION_AFTER = re.compile(r"\s*(?:in|of|on|for)\s+(?:the\s+)?(?:operation\s+|endpoint\s+)?`?\s*\x00(\d+)\x00"
-                              r"\s*`?(\s+[A-Za-z' ]*)", re.I)
+# operation is", "`limit` query parameter on GET /pets is"
+_OPERATION_AFTER = re.compile(r"([A-Za-z' ]*?)\s*\b(?:in|of|on|for)\s+(?:the\s+)?(?:operation\s+|endpoint\s+)?"
+                              r"`?\s*\x00(\d+)\x00\s*`?(\s+[A-Za-z' ]*)", re.I)
 # An operation, with the word for it after it if any: "GET /pets operation"
 _NAMED_OPERATION = re.compile(rf"{_OPERATION.pattern}(?:`?\s+(?:operation|endpoint|call)\b)?")
 # Words for what a schema is, said after its name: "`tag` in the Pet schema", "inside the Owner model"
