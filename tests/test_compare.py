@@ -1110,6 +1110,30 @@ def test_items_unique_items_and_multiple_of_are_compared(write):
         assert _schema_pair(write, a, b) == want, (a, b)
 
 
+def test_dependent_required_and_contains_counts_are_compared(write):
+    obj = "{type: object, properties: {street: {type: string}, city: {type: string}, zip: {type: string}}%s}"
+    tags = "{type: array, contains: {type: string, const: vip}%s}"
+    cases = {  # a field given that makes another required: a pair added tightens, one removed loosens
+        (obj % "", obj % ", dependentRequired: {street: [city]}"): [
+            ("constraint-tightened", "no dependency", "dependentRequired: street requires city")],
+        (obj % ", dependentRequired: {street: [city]}", obj % ", dependentRequired: {street: [city, zip]}"): [
+            ("constraint-tightened", "no dependency", "dependentRequired: street requires zip")],
+        (obj % ", dependentRequired: {street: [city, zip]}", obj % ", dependentRequired: {street: [zip]}"): [
+            ("constraint-loosened", "dependentRequired: street requires city", "no dependency")],
+        (obj % ", dependentRequired: {street: [city]}", obj % ", dependentRequired: {street: [city]}"): [],
+        # minContains is 1 unless written; maxContains has no default
+        (tags % "", tags % ", minContains: 1"): [],
+        (tags % "", tags % ", minContains: 2"): [("constraint-tightened", "minContains 1", "minContains 2")],
+        (tags % ", minContains: 2", tags % ", minContains: 0"): [
+            ("constraint-loosened", "minContains 2", "minContains 0")],
+        (tags % "", tags % ", maxContains: 3"): [("constraint-tightened", "maxContains none", "maxContains 3")],
+        (tags % ", maxContains: 3", tags % ", maxContains: 5"): [
+            ("constraint-loosened", "maxContains 3", "maxContains 5")],
+    }
+    for (a, b), want in cases.items():
+        assert _schema_pair(write, a, b) == want, (a, b)
+
+
 def test_a_request_body_made_optional_and_a_parameter_written_otherwise(write):
     op = """
         paths:
