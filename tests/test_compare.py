@@ -1523,6 +1523,56 @@ def test_an_object_that_became_an_array_of_it_is_compared_with_its_items(write):
         ("type-changed", "object", "array of object"), ("type-changed", "string", "integer")]
 
 
+def test_a_list_wrapped_in_an_object_is_not_compared_with_its_items(write):
+    spec = """
+        paths:
+          /pets:
+            get:
+              responses: {'200': {description: ok, content: {application/json: {schema: %s}}}}
+        components:
+          schemas:
+            Pet: {type: object, properties: {id: {type: string}, name: {type: string}}}
+            Other: {type: object, properties: {id: {type: string}, name: {type: string}}}
+            Page: {type: object, properties: {pets: {type: array, items: {$ref: '#/components/schemas/Pet'}}, %s}}
+        """
+    pets = "{type: array, items: {$ref: '#/components/schemas/Pet'}}"
+    page = "{$ref: '#/components/schemas/Page'}"
+
+    def changes(a, b, more="next: {type: string}"):
+        root = write({"a/openapi.yaml": HEAD + dedent(spec % (a, more)),
+                      "b/openapi.yaml": HEAD + dedent(spec % (b, more))})
+        s = SpecSet()
+        s.load(root / "a/openapi.yaml", "a")
+        s.load(root / "b/openapi.yaml", "b")
+        return sorted((c.kind, c.where.split(": ", 1)[-1], c.before, c.after)
+                      for c in s.compare("GET /pets", "a", "b").changes)
+
+    # A list of Pet, then a page holding that list: the Pets are in `pets`, not removed; the page is not a Pet.
+    assert changes(pets, page) == [("field-added", "next", None, "string"),
+                                   ("field-added", "pets", None, "array of Pet"),
+                                   ("type-changed", "response 200 application/json", "array of Pet", "Page")]
+    assert changes(page, pets) == [("field-removed", "next", "string", None),
+                                   ("field-removed", "pets", "array of Pet", None),
+                                   ("type-changed", "response 200 application/json", "Page", "array of Pet")]
+    # A page with fields named as a Pet's is still a page: it holds the list.
+    assert [c for c in changes(pets, page, "id: {type: string}, name: {type: string}")
+            if c[0] == "field-removed"] == []
+    # Another schema with the same fields is the same thing: one line.
+    assert changes("{type: array, items: {$ref: '#/components/schemas/Other'}}",
+                   "{$ref: '#/components/schemas/Pet'}") == [
+        ("type-changed", "response 200 application/json", "array of Other", "Pet")]
+    # A tree holds a list of itself, and is still the one thing: one line.
+    tree = spec.replace("Pet: {type: object, properties: {", "Pet: {type: object, properties: {kids: "
+                        "{type: array, items: {$ref: '#/components/schemas/Pet'}}, ")
+    root = write({"a/openapi.yaml": HEAD + dedent(tree % ("{$ref: '#/components/schemas/Pet'}", "next: {}")),
+                  "b/openapi.yaml": HEAD + dedent(tree % (pets, "next: {}"))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    assert [(c.kind, c.before, c.after) for c in s.compare("GET /pets", "a", "b").changes] == [
+        ("type-changed", "Pet", "array of Pet")]
+
+
 def test_a_named_object_says_its_name_only_where_the_two_sides_read_differently(write):
     spec = """
         paths:
