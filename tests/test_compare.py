@@ -1561,6 +1561,16 @@ def test_a_list_wrapped_in_an_object_is_not_compared_with_its_items(write):
     assert changes("{type: array, items: {$ref: '#/components/schemas/Other'}}",
                    "{$ref: '#/components/schemas/Pet'}") == [
         ("type-changed", "response 200 application/json", "array of Other", "Pet")]
+    # A tree holds a list of itself, and is still the one thing: one line.
+    tree = spec.replace("Pet: {type: object, properties: {", "Pet: {type: object, properties: {kids: "
+                        "{type: array, items: {$ref: '#/components/schemas/Pet'}}, ")
+    root = write({"a/openapi.yaml": HEAD + dedent(tree % ("{$ref: '#/components/schemas/Pet'}", "next: {}")),
+                  "b/openapi.yaml": HEAD + dedent(tree % (pets, "next: {}"))})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "a")
+    s.load(root / "b/openapi.yaml", "b")
+    assert [(c.kind, c.before, c.after) for c in s.compare("GET /pets", "a", "b").changes] == [
+        ("type-changed", "Pet", "array of Pet")]
 
 
 def test_a_named_object_says_its_name_only_where_the_two_sides_read_differently(write):

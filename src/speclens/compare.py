@@ -1062,13 +1062,13 @@ def _same_thing(g1: Graph, obj: Node, g2: Graph, item: Node) -> bool:
     fields in common.
     An object holding a list of those items in a field of its own (`{pets: [Pet], next}` for `[Pet]`) wraps the
     list; it is not one of them."""
+    if obj.data.get("named") and item.data.get("named") and obj.name == item.name:
+        return True  # a tree holds a list of itself (`children: [Cat]`): still the one thing
     for f, _ in _fields(g1, obj).values():
         for e in g1.outgoing(f.id, g.FIELD_TYPE):
             inner = [x for x in g1.outgoing(e.target, g.ITEMS) if x.data.get("keyword") == "items"]
             if inner and g1.nodes[inner[0].target].name == item.name:
                 return False
-    if obj.data.get("named") and item.data.get("named") and obj.name == item.name:
-        return True
     fa, fb = set(_fields(g1, obj)), set(_fields(g2, item))
     return bool(fa | fb) and 2 * len(fa & fb) >= len(fa | fb)
 
