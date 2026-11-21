@@ -771,7 +771,9 @@ class _Comparer:
             na, nb = self.ga.nodes[ca[k].target], self.gb.nodes[cb[k].target]
             if k in ("if", "not"):
                 if self.differs(na, nb):
-                    out.append(self.change("condition-changed", "", f"{k}: a schema", f"{k}: another", na.id, nb.id))
+                    wa, wb = _brief(self.ga, na), _brief(self.gb, nb)
+                    out.append(self.change("condition-changed", "", f"{k}: {wa}", f"{k}: {wb}" if wb != wa
+                                           else f"{k}: changed beyond what is shown", na.id, nb.id))
             else:
                 out_, kids_ = self.matched(na, nb, k)
                 out += out_
@@ -789,8 +791,9 @@ class _Comparer:
         for k in sorted((set(ca) ^ set(cb)) | set(ba) | set(bb)):
             if k in ca and k in cb:
                 continue
-            said = [f"{k}: a schema" if k in c else f"{k}: {str(b[k]).lower()}" if k in b else f"no {k}"
-                    for c, b in ((ca, ba), (cb, bb))]
+            said = [f"{k}: {_brief(graph, graph.nodes[c[k].target])}{_when(graph, c, k)}" if k in c
+                    else f"{k}: {str(b[k]).lower()}" if k in b else f"no {k}"
+                    for graph, c, b in ((self.ga, ca, ba), (self.gb, cb, bb))]
             if said[0] == said[1]:
                 continue
             ids = (ca[k].target if k in ca else sa.id, cb[k].target if k in cb else sb.id)
@@ -1235,6 +1238,63 @@ def _boolean_conditions(data: dict) -> dict:
     out.update({f"dependentSchemas/{k}": v for k, v in (dependent.items() if isinstance(dependent, dict) else ())
                 if isinstance(v, bool)})
     return out
+
+
+# Keys that say something about a value without limiting it, or keep the graph's own books.
+_NOTES = {"title", "description", "deprecated", "readOnly", "writeOnly", "default", "examples", "example", "name",
+          "required", "named", "effective_required"}
+
+
+def _brief(graph: Graph, node: Node) -> str:
+    """A condition's schema in a few words, for what it asks: `requires n`, `kind is "a"`, `n absent`,
+    `not (...)`, with `and more` where it asks something else too; `a schema` where none of it can be said."""
+    parts, whole = _briefed(graph, node, 0)
+    text = " and ".join(parts + ([] if whole else ["more"]))
+    return text if parts and len(text) <= 100 else "a schema"
+
+
+def _briefed(graph: Graph, node: Node, depth: int) -> tuple[list[str], bool]:
+    """(what a condition asks, in words; whether that is all it asks)."""
+    parts = []
+    whole = depth < 2 and set(node.data) <= _NOTES | {"type"} and node.data.get("type") in (None, "object") \
+        and not any(graph.outgoing(node.id, k) for k in (g.ITEMS, g.VALUES, g.OPTION, g.CONDITIONAL, g.INHERITS))
+    required = _names(node.data.get("required"))
+    if required:
+        parts.append("requires " + ", ".join(required))
+    for name, (f, _) in _fields(graph, node).items():
+        types = graph.outgoing(f.id, g.FIELD_TYPE)
+        target = graph.nodes[types[0].target] if types else None
+        data = {**(target.data if target else {}), **f.data}
+        if target and any(graph.outgoing(target.id, k) for k in (g.HAS_FIELD, g.ITEMS, g.VALUES, g.OPTION,
+                                                                    g.CONDITIONAL, g.INHERITS, g.NOT)):
+            whole = False
+        if "const" in data:
+            parts.append(f"{name} is {json_text(data['const'])}")
+            whole = whole and set(data) <= _NOTES | {"const", "enum", "type"}
+        elif isinstance(data.get("enum"), list) and data["enum"]:
+            shown = ", ".join(json_text(v) for v in data["enum"][:3]) + (", ..." if len(data["enum"]) > 3 else "")
+            parts.append(f"{name} is one of {shown}")
+            whole = whole and set(data) <= _NOTES | {"enum", "type"}
+        else:  # a field asked nothing of, or asked what is not said
+            whole = whole and set(data) <= _NOTES
+    for e in graph.outgoing(node.id, g.NOT) if depth < 2 else ():
+        inner = graph.nodes[e.target]
+        inner_parts, inner_whole = _briefed(graph, inner, depth + 1)
+        names = _names(inner.data.get("required"))
+        if len(names) == 1 and inner_whole and inner_parts == [f"requires {names[0]}"]:
+            parts.append(f"{names[0]} absent")  # `not: {required: [x]}`: x not given
+        else:
+            # what is not said inside a `not` turns its meaning around: none of it is said
+            parts.append(f"not ({' and '.join(inner_parts)})" if inner_parts and inner_whole else "not (a schema)")
+    return parts, whole
+
+
+def _when(graph: Graph, conditions: dict, k: str) -> str:
+    """When `then` or `else` applies, as its `if` says it: ` (if kind is "a")`, ` (unless kind is "a")`."""
+    if k not in ("then", "else") or "if" not in conditions:
+        return ""
+    words = _brief(graph, graph.nodes[conditions["if"].target])
+    return "" if words == "a schema" else f" ({'if' if k == 'then' else 'unless'} {words})"
 
 
 def _conditions(graph: Graph, node: Node) -> dict:

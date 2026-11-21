@@ -1200,37 +1200,57 @@ def test_not_if_then_else_and_dependent_schemas_are_compared(write):
     obj = "{type: object, properties: {kind: {type: string}, n: {type: integer}}%s}"
     cond = ", if: {properties: {kind: {const: a}}}, then: {required: [n]}"
     cases = {
-        ("", cond): [("constraint-tightened", "no then", "then: a schema")],
-        (cond, ""): [("constraint-loosened", "then: a schema", "no then")],
-        (cond, cond + ", else: {required: [kind]}"): [("constraint-tightened", "no else", "else: a schema")],
-        (", then: {required: [n]}", cond): [("condition-changed", "no if", "if: a schema")],
-        (cond, cond.replace("const: a", "const: b")): [("condition-changed", "if: a schema", "if: another")],
+        ("", cond): [("constraint-tightened", "no then", "then: requires n (if kind is \"a\")")],
+        (cond, ""): [("constraint-loosened", "then: requires n (if kind is \"a\")", "no then")],
+        (cond, cond + ", else: {required: [kind]}"): [
+            ("constraint-tightened", "no else", "else: requires kind (unless kind is \"a\")")],
+        (", then: {required: [n]}", cond): [("condition-changed", "no if", "if: kind is \"a\"")],
+        (cond, cond.replace("const: a", "const: b")): [
+            ("condition-changed", "if: kind is \"a\"", "if: kind is \"b\"")],
         (cond, ", if: {properties: {kind: {const: a}}, description: test}, then: {required: [n]}"): [],
         (cond.replace("{required: [n]}", "{properties: {n: {maximum: 5}}}"),
          cond.replace("{required: [n]}", "{properties: {n: {maximum: 4}}}")): [
             ("constraint-tightened", "maximum 5", "maximum 4")],
-        ("", ", not: {required: [n]}"): [("constraint-tightened", "no not", "not: a schema")],
-        (", not: {required: [n]}", ""): [("constraint-loosened", "not: a schema", "no not")],
+        ("", ", not: {required: [n]}"): [("constraint-tightened", "no not", "not: requires n")],
+        (", not: {required: [n]}", ""): [("constraint-loosened", "not: requires n", "no not")],
         (", not: {required: [n]}", ", not: {required: [kind]}"): [
-            ("condition-changed", "not: a schema", "not: another")],
+            ("condition-changed", "not: requires n", "not: requires kind")],
         ("", ", dependentSchemas: {kind: {required: [n]}}"): [
-            ("constraint-tightened", "no dependentSchemas/kind", "dependentSchemas/kind: a schema")],
+            ("constraint-tightened", "no dependentSchemas/kind", "dependentSchemas/kind: requires n")],
         (", dependentSchemas: {kind: {properties: {n: {minimum: 0}}}}",
          ", dependentSchemas: {kind: {properties: {n: {minimum: 1}}}}"): [
             ("constraint-tightened", "minimum 0", "minimum 1")],
         (", dependentSchemas: {kind: {required: [n]}}", ", dependentSchemas: {n: {required: [n]}}"): [
-            ("constraint-loosened", "dependentSchemas/kind: a schema", "no dependentSchemas/kind"),
-            ("constraint-tightened", "no dependentSchemas/n", "dependentSchemas/n: a schema")],
+            ("constraint-loosened", "dependentSchemas/kind: requires n", "no dependentSchemas/kind"),
+            ("constraint-tightened", "no dependentSchemas/n", "dependentSchemas/n: requires n")],
         # written as booleans: `then: true` and `not: false` do nothing; `then: false` and `not: true` allow nothing
         (", then: true", ""): [],
         ("", ", not: false"): [],
         ("", ", not: true"): [("constraint-tightened", "no not", "not: true")],
-        (", not: {required: [n]}", ", not: true"): [("constraint-tightened", "not: a schema", "not: true")],
-        (cond, cond.replace("{required: [n]}", "false")): [("constraint-tightened", "then: a schema", "then: false")],
+        (", not: {required: [n]}", ", not: true"): [("constraint-tightened", "not: requires n", "not: true")],
+        (cond, cond.replace("{required: [n]}", "false")): [
+            ("constraint-tightened", "then: requires n (if kind is \"a\")", "then: false")],
         (", dependentSchemas: {kind: false}", ", dependentSchemas: {kind: true}"): [
             ("constraint-loosened", "dependentSchemas/kind: false", "dependentSchemas/kind: true")],
         (cond, cond.replace("if: {properties: {kind: {const: a}}}", "if: true")): [
-            ("condition-changed", "if: a schema", "if: true")],
+            ("condition-changed", "if: kind is \"a\"", "if: true")],
+        # A condition is said by what it asks: a field absent, a value among several; else "a schema".
+        (cond, cond + ", else: {not: {required: [n]}}"): [
+            ("constraint-tightened", "no else", "else: n absent (unless kind is \"a\")")],
+        ("", ", if: {properties: {kind: {enum: [a, b, c, d]}}}, then: {required: [n]}"): [
+            ("constraint-tightened", "no then", "then: requires n (if kind is one of \"a\", \"b\", \"c\", ...)")],
+        ("", ", if: {properties: {kind: {const: a}}}, then: {properties: {n: {maximum: 5}}}"): [
+            ("constraint-tightened", "no then", "then: a schema (if kind is \"a\")")],
+        # Where it asks more than can be said, it says so: a part that looks like the whole would be wrong.
+        ("", ", if: {properties: {kind: {const: a}, n: {minimum: 18}}}, then: {required: [n]}"): [
+            ("constraint-tightened", "no then", "then: requires n (if kind is \"a\" and more)")],
+        ("", ", if: {properties: {kind: {const: a}}}, then: {required: [n], properties: {n: {maximum: 3}}}"): [
+            ("constraint-tightened", "no then", "then: requires n and more (if kind is \"a\")")],
+        ("", ", if: {required: [kind], minProperties: 2}, then: {required: [n]}"): [
+            ("constraint-tightened", "no then", "then: requires n (if requires kind and more)")],
+        (", if: {properties: {kind: {const: a}, n: {minimum: 18}}}, then: {required: [n]}",
+         ", if: {properties: {kind: {const: a}, n: {minimum: 21}}}, then: {required: [n]}"): [
+            ("condition-changed", "if: kind is \"a\" and more", "if: changed beyond what is shown")],
     }
     for (a, b), want in cases.items():
         assert _schema_pair(write, obj % a, obj % b) == want, (a, b)
