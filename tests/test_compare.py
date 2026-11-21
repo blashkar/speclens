@@ -1123,9 +1123,10 @@ def test_dependent_required_and_contains_counts_are_compared(write):
         (obj % ", dependentRequired: {street: [city]}", obj % ", dependentRequired: {street: [city]}"): [],
         # minContains is 1 unless written; maxContains has no default
         (tags % "", tags % ", minContains: 1"): [],
-        (tags % "", tags % ", minContains: 2"): [("constraint-tightened", "minContains 1", "minContains 2")],
+        (tags % "", tags % ", minContains: 2"): [("constraint-tightened", "minContains 1 (default)", "minContains 2")],
         (tags % ", minContains: 2", tags % ", minContains: 0"): [
             ("constraint-loosened", "minContains 2", "minContains 0")],
+        (tags % ", minContains: 3", tags % ""): [("constraint-loosened", "minContains 3", "minContains 1 (default)")],
         (tags % "", tags % ", maxContains: 3"): [("constraint-tightened", "maxContains none", "maxContains 3")],
         (tags % ", maxContains: 3", tags % ", maxContains: 5"): [
             ("constraint-loosened", "maxContains 3", "maxContains 5")],
