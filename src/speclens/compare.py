@@ -131,6 +131,11 @@ _LIMITS = {"maxLength": True, "maxItems": True, "maxProperties": True, "maxConta
 _LIMIT_DEFAULTS = {"minContains": 1}
 
 
+def _limit_text(key: str, value, data: dict) -> str:
+    """`minContains 2`; a value not written but taken from the default says so: `minContains 1 (default)`."""
+    return f"{key} {_show(value)}" + (" (default)" if key not in data and key in _LIMIT_DEFAULTS else "")
+
+
 def _bound(d: dict, side: str) -> tuple | None:
     """The lower or upper bound on a number, as (value, exclusive), whichever way it is written: OpenAPI 3.0's
     `maximum: 5` with `exclusiveMaximum: true`, or 3.1's `exclusiveMaximum: 5`. With both a bound and an
@@ -367,7 +372,7 @@ class _Comparer:
                 kind = "constraint-loosened"
             else:
                 kind = "constraint-loosened" if (vb > va) == larger_allows_more else "constraint-tightened"
-            out.append(self.change(kind, where, f"{k} {_show(va)}", f"{k} {_show(vb)}", a, b))
+            out.append(self.change(kind, where, _limit_text(k, va, da), _limit_text(k, vb, db), a, b))
         for end in ("min", "max"):
             ba, bb = _bound(da, end), _bound(db, end)
             if ba == bb:
