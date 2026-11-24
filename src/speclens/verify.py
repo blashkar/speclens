@@ -223,6 +223,7 @@ class _Evidence:
         # name -> label -> keyword -> values shown (maxLength 3); and (schema, field) -> the same
         self.limits: dict[str, dict[str, dict[str, set[float]]]] = {}
         self.limits_in: dict[tuple[str, str], dict[str, dict[str, set[float]]]] = {}
+        self.no_limit: set[tuple[str, str, str]] = set()  # (label, name, keyword) a comparison shows as "none"
         self.counts: list[_Countable] = []  # schemas and operations whose complete lists the evidence holds
         self.operations: dict[str, set[str]] = {}  # label -> operations shown to exist there
         self.methods: dict[tuple[str, str], set[str]] = {}  # (label, path) -> all the methods it has
@@ -376,6 +377,9 @@ class _Evidence:
                 if m:
                     for name in _changed_thing(c):
                         self.mark_limit(label, name, m.group(1), float(m.group(2)))
+                none = re.fullmatch(r"(\w+) none", str(c.get(side) or ""))
+                if none:
+                    self.no_limit.update((label, name, none.group(1)) for name in _changed_thing(c))
 
     def required_changes(self, labels: dict, changes: list):
         """What comparisons show: a parameter or field added as optional or required, required added or removed."""
@@ -1117,6 +1121,16 @@ _COUNT_OF = re.compile(rf"(?<![\w`-])(at\s+least|at\s+most|up\s+to|no\s+more\s+t
 # "between 1 and 10 characters", "from 0 to 120"
 _BETWEEN_LIMITS = re.compile(rf"\b(?:between\s+{_N}\s+and|from\s+{_N}\s+(?:to|through))\s+{_N}"
                              rf"(?:\s+{_UNIT}\b|(?=\s*\(?(?:inclusive)?\)?\s*[.;]?\s*$))", re.I)
+# "the maximum length of `name` changed from 40 to 20", "`year` minimum value went from none (unbounded) to 1997":
+# a limit in two versions, the older first. "none" and the like say there was no such limit.
+_SET = r"-?\d[\d,]*(?:\.\d+)?(?!\w|[.,]\d)|none|unbounded|unlimited|nothing|no\s+(?:limit|minimum|maximum)"
+_LIMIT_CHANGE = re.compile(
+    rf"(?<![\w`-])(max(?:imum)?|min(?:imum)?|maxLength|minLength|maxItems|minItems)(?![\w-])"
+    rf"(?:\s+(length|value|size|number\s+of\s+(?:items|elements)))?"
+    rf"(?:\s+(?:of|for)\s+(?:the\s+)?`([^`]+)`{_IN_SCHEMA})?"
+    rf"\s+(?:(?:was|were|has\s+been|have\s+been)\s+)?(?:changed|went|moved|increased|decreased|raised|lowered|"
+    rf"reduced|tightened|loosened|relaxed|updated|goes|changes)\s+from\s+({_SET})(?:\s*\([^)]*\))?"
+    rf"\s+to\s+({_SET})(?:\s*\([^)]*\))?(?:\s+{_UNIT}\b)?", re.I)
 _ROUGHLY = re.compile(r"\b(?:about|around|roughly|approximately|nearly|almost|over|under|typically|usually|"
                       r"recommended|suggested|ideally)\s*$", re.I)
 _NO_LIMIT = re.compile(r"\b(?:no|not|without|any)\s+(?:a\s+)?(?:max(?:imum)?|min(?:imum)?|limit)", re.I)
@@ -1308,6 +1322,48 @@ def _shown_as(values: dict) -> str:
                      for (lab, k), v in sorted(values.items(), key=lambda x: label_key(x[0][0])))
 
 
+def _limit_change(ev: _Evidence, clause: str, m, schemas, labels, lead, clause_lead, pronoun) \
+        -> tuple[list[Finding], int]:
+    """A limit said to change from one value to another: the first is checked in the older version of each
+    comparison shown, the second in the newer. A side said as "none" is wrong when that version shows the limit."""
+    word, what = m.group(1).lower(), (m.group(2) or m.group(6) or "").lower()
+    side = "min" if word.startswith("min") else "max"
+    counts = "length" if "length" in word or what in ("length", "characters", "character", "chars", "char", "digits",
+                                                      "digit", "letters", "letter") \
+        else "items" if "items" in word or what[:4] in ("item", "elem", "entr", "numb") else ""
+    if _ROUGHLY.search(clause[:m.start(4)]):
+        return [], 0
+    subjects = [_limit_name(m.group(3))] if m.group(3) else _subjects_at(clause, m.start(), (), lead, clause_lead,
+                                                                          m.end(), pronoun)
+    pairs = list(dict.fromkeys((c["a_label"], c["b_label"]) for c in ev.comparisons
+                               if not labels or {c["a_label"], c["b_label"]} & set(labels)))
+    out, checked = [], 0
+    for subject in subjects if pairs else ():  # with no comparison shown, nothing says which version is older
+        looked = _shown_for(ev, subject, schemas, [])
+        keywords = _KEYWORDS[(side, counts)]
+        values = {(lab, k): v for lab, kv in looked.items() for k, v in kv.items() if k in keywords}
+        member = _member(subject)[1] or subject
+        unset = {(lab, k) for lab, n, k in ev.no_limit if n == member and k in keywords}
+        if not values:
+            continue
+        checked += 1
+        wrong = False
+        for pair in pairs:
+            for lab, said in zip(pair, (m.group(4), m.group(5))):
+                shown = set().union(*(v for (x, _), v in values.items() if x == lab))
+                number = None if not re.match(r"-?\d", said) else float(said.replace(",", ""))
+                # a number not among those shown, or "none" where one is shown; a version not shown says nothing
+                none_shown = any(x == lab for x, _ in unset)
+                wrong = wrong or bool(shown) and (number is None or number not in shown) or \
+                    number is not None and not shown and (lab in looked or none_shown)
+        if wrong:
+            nones = "".join(f"; no {k} in {lab}" for lab, k in sorted(unset, key=lambda x: label_key(x[0])))
+            out.append(Finding("contradicted-claim", clause.strip(),
+                               f"the evidence shows {subject}: {_shown_as(values)}{nones}",
+                               sorted({lab for lab, _ in values} | {lab for lab, _ in unset}, key=label_key)))
+    return out, checked
+
+
 def _check_limits(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
     """Claims of a field's or parameter's limit ("`nickname`: maximum 40 characters") where the evidence shows
     that limit with another value, and claims that it has none ("`nickname` has no maximum length") where the
@@ -1369,6 +1425,11 @@ def _check_limits(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
                 ([section] if section else [])
             schemas = [x for x in _IDENT.findall(_CODE.sub(lambda m: m.group(1), clause)) if x in ev.schemas]
 
+            for m in list(_LIMIT_CHANGE.finditer(clause)):
+                found, counted = _limit_change(ev, clause, m, schemas, labels, lead, clause_lead, pronoun)
+                out += found
+                checked += counted
+                clause = clause[:m.start()] + " " * (m.end() - m.start()) + clause[m.end():]
             absent = _ABSENT.search(clause)
             if absent:  # "`x` has no maximum length": wrong when the evidence shows one
                 said_words = (absent.group(1) or "").lower()

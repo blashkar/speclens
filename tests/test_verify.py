@@ -1242,3 +1242,59 @@ def test_a_field_whose_own_name_holds_dots_is_one_name(write):
         ("contradicted-claim", "the evidence shows airline: maxLength 4 in a")]
     assert found("In a, `Extra.airline` is optional.") == [
         ("contradicted-claim", "the evidence shows Extra.airline required in a")]
+
+
+def test_a_limit_said_to_change_from_one_value_to_another_is_checked_in_each_version(write):
+    root = write({"a/openapi.yaml": """
+        openapi: 3.1.0
+        info: {title: t, version: '1'}
+        paths: {}
+        components:
+          schemas:
+            Car:
+              type: object
+              properties:
+                year: {type: integer}
+                name: {type: string, maxLength: 40}
+                code: {type: string, maxLength: 8}
+        """, "b/openapi.yaml": """
+        openapi: 3.1.0
+        info: {title: t, version: '2'}
+        paths: {}
+        components:
+          schemas:
+            Car:
+              type: object
+              properties:
+                year: {type: integer, minimum: 1997}
+                name: {type: string, maxLength: 20}
+                code: {type: string}
+        """})
+    s = SpecSet()
+    s.load(root / "a/openapi.yaml", "1")
+    s.load(root / "b/openapi.yaml", "2")
+    evidence = [s.compare("Car", "1", "2")]
+    cases = {
+        "`year` minimum value changed from none (unbounded) to 1997.": [],
+        "The minimum value of `year` changed from none (unbounded) to 1990.": [
+            "the evidence shows year: minimum 1997 in 2; no minimum in 1"],
+        "The minimum of `year` changed from 1997 to none.": [
+            "the evidence shows year: minimum 1997 in 2; no minimum in 1"],
+        "The maxLength of `name` was lowered from 40 to 20 characters.": [],
+        "`name` maximum length went from 40 to 25 characters.": ["the evidence shows name: maxLength 40 in 1; "
+                                                                 "maxLength 20 in 2"],
+        "The maximum length of `name` increased from 20 to 40.": ["the evidence shows name: maxLength 40 in 1; "
+                                                                  "maxLength 20 in 2"],
+        "The maximum length of `code` changed from 8 to none.": [],
+        "The maximum length of `code` changed from 8 to 16.": ["the evidence shows code: maxLength 8 in 1; "
+                                                               "no maxLength in 2"],
+        "`name` maximum length went from 40 to 20, and `year` minimum went from none to 1997.": [],
+        "The maximum length of `name` went from about 40 to 20.": [],  # said loosely: not checked
+    }
+    for answer, want in cases.items():
+        r = verify(answer, evidence)
+        assert [f.detail for f in r.findings if f.kind == "contradicted-claim"] == want, (answer, r.to_text())
+        assert r.checked_limits == (0 if "about" in answer else 2 if ", and" in answer else 1), answer
+    # Two schemas shown side by side say nothing of which version is older: the change is not checked
+    assert verify("The maxLength of `name` changed from 40 to 25.",
+                  [s.get_schema("Car", "1"), s.get_schema("Car", "2")]).checked_limits == 0
