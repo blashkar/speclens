@@ -1121,6 +1121,8 @@ def test_dependent_required_and_contains_counts_are_compared(write):
         (obj % ", dependentRequired: {street: [city, zip]}", obj % ", dependentRequired: {street: [zip]}"): [
             ("constraint-loosened", "dependentRequired: street requires city", "no dependency")],
         (obj % ", dependentRequired: {street: [city]}", obj % ", dependentRequired: {street: [city]}"): [],
+        # an entry that is not a list of names is left out, and the good ones next to it still count
+        (obj % ", dependentRequired: {street: [city]}", obj % ", dependentRequired: {street: [city], zip: 5}"): [],
         # minContains is 1 unless written; maxContains has no default
         (tags % "", tags % ", minContains: 1"): [],
         (tags % "", tags % ", minContains: 2"): [("constraint-tightened", "minContains 1 (default)", "minContains 2")],

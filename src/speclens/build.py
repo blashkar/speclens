@@ -142,13 +142,24 @@ class _Builder:
             if empty is not None:
                 self.warn_once(doc, ptr, empty)
             return _BAD
+        key = pointer.split(ptr)[-1] if ptr else ""
+        if shape is _MAP_OF_NAMES and isinstance(value, dict):
+            return self.names_map(value, key, doc, ptr)
         out = check(value)
         if out is not value:
-            key = pointer.split(ptr)[-1] if ptr else ""
             what = "ignored" if out is _BAD else f"read as {_kind_of(out)}"
             found = _found(value, shape)
             self.warn_once(doc, ptr, f"`{key}` should be {wording}, found {found}; {what}")
         return out
+
+    def names_map(self, value: dict, key: str, doc: Document, ptr: str) -> dict:
+        """A map of lists of names (`dependentRequired`), entry by entry: an entry that is not a list of names is
+        said and left out, and the others are kept, so one bad entry does not hide the rest."""
+        for name, names in value.items():
+            if not _is_names(names):
+                self.warn_once(doc, pointer.join(ptr, str(name)), f"`{key}` entry `{name}` should be a list of names, "
+                               f"found {_found(names, _NAMES)}; that entry is ignored")
+        return {str(k): v for k, v in value.items() if _is_names(v)}
 
     def check_type_names(self, value, doc: Document, ptr: str):
         """`type: label`: a name JSON Schema does not have. Kept as written, and compared as written, but said."""
@@ -1371,11 +1382,7 @@ def _kind_of(v) -> str:
 
 
 def _found(value, shape) -> str:
-    """What a value of the wrong shape is. A map of lists of names names its first entry that isn't one, since
-    "found a map" would not say what is wrong."""
-    if shape is _MAP_OF_NAMES and isinstance(value, dict):
-        name, bad = next((k, v) for k, v in value.items() if not _is_names(v))
-        return f"`{name}` as {_found(bad, _NAMES)}"
+    """What a value of the wrong shape is, as a warning says it."""
     return "a list holding other values" if isinstance(value, list) and shape in (_NAMES, _TYPE) else _kind_of(value)
 
 
