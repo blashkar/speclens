@@ -186,6 +186,23 @@ def test_required_true_on_a_property_is_said_once_wherever_it_is(spec):
         (11, "`required` should be a list of names, found `true`; ignored")]
 
 
+def test_a_map_of_lists_of_names_says_which_entry_is_not_one(spec):
+    s = spec({"openapi.yaml": """
+        openapi: 3.1.0
+        info: {title: t, version: '1'}
+        paths: {}
+        components:
+          schemas:
+            A: {type: object, dependentRequired: {street: city}}
+            B: {type: object, dependentRequired: {street: [city], zip: [city, 3]}}
+            C: {type: object, dependentRequired: {street: [city]}}
+        """})
+    assert [(i.line, i.message) for i in s.issues] == [
+        (6, '`dependentRequired` should be a map of lists of names, found `street` as the text "city"; ignored'),
+        (7, "`dependentRequired` should be a map of lists of names, found `zip` as a list holding other values; "
+            "ignored")]
+
+
 def test_a_key_left_empty_is_absent_but_an_empty_type_is_said(spec):
     s = spec({"openapi.yaml": """
         openapi: 3.0.3

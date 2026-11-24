@@ -146,8 +146,7 @@ class _Builder:
         if out is not value:
             key = pointer.split(ptr)[-1] if ptr else ""
             what = "ignored" if out is _BAD else f"read as {_kind_of(out)}"
-            found = "a list holding other values" if isinstance(value, list) and shape in (_NAMES, _TYPE) \
-                else _kind_of(value)
+            found = _found(value, shape)
             self.warn_once(doc, ptr, f"`{key}` should be {wording}, found {found}; {what}")
         return out
 
@@ -1369,6 +1368,15 @@ def _kind_of(v) -> str:
     if isinstance(v, str):
         return f'the text "{v}"' if 0 < len(v) <= 20 else "text"
     return "a list" if isinstance(v, list) else "a map"
+
+
+def _found(value, shape) -> str:
+    """What a value of the wrong shape is. A map of lists of names names its first entry that isn't one, since
+    "found a map" would not say what is wrong."""
+    if shape is _MAP_OF_NAMES and isinstance(value, dict):
+        name, bad = next((k, v) for k, v in value.items() if not _is_names(v))
+        return f"`{name}` as {_found(bad, _NAMES)}"
+    return "a list holding other values" if isinstance(value, list) and shape in (_NAMES, _TYPE) else _kind_of(value)
 
 
 def _widen(types: set) -> set:
