@@ -186,7 +186,7 @@ def test_required_true_on_a_property_is_said_once_wherever_it_is(spec):
         (11, "`required` should be a list of names, found `true`; ignored")]
 
 
-def test_a_map_of_lists_of_names_says_which_entry_is_not_one(spec):
+def test_a_map_of_lists_of_names_keeps_its_good_entries_and_says_the_bad_ones(spec):
     s = spec({"openapi.yaml": """
         openapi: 3.1.0
         info: {title: t, version: '1'}
@@ -194,13 +194,22 @@ def test_a_map_of_lists_of_names_says_which_entry_is_not_one(spec):
         components:
           schemas:
             A: {type: object, dependentRequired: {street: city}}
-            B: {type: object, dependentRequired: {street: [city], zip: [city, 3]}}
-            C: {type: object, dependentRequired: {street: [city]}}
+            B:
+              type: object
+              dependentRequired:
+                street: [city]
+                zip: [city, 3]
+                1: [city]
+            C: {type: object, dependentRequired: [street]}
         """})
     assert [(i.line, i.message) for i in s.issues] == [
-        (6, '`dependentRequired` should be a map of lists of names, found `street` as the text "city"; ignored'),
-        (7, "`dependentRequired` should be a map of lists of names, found `zip` as a list holding other values; "
-            "ignored")]
+        (6, '`dependentRequired` entry `street` should be a list of names, found the text "city"; that entry is '
+            'ignored'),
+        (11, "`dependentRequired` entry `zip` should be a list of names, found a list holding other values; that "
+             "entry is ignored"),
+        (13, "`dependentRequired` should be a map of lists of names, found a list; ignored")]
+    data = {n: s.graph.nodes[f"{s.label}:schema/{n}"].data.get("dependentRequired") for n in "ABC"}
+    assert data == {"A": {}, "B": {"street": ["city"], "1": ["city"]}, "C": None}
 
 
 def test_a_key_left_empty_is_absent_but_an_empty_type_is_said(spec):
