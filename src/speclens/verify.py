@@ -1322,10 +1322,12 @@ def _shown_as(values: dict) -> str:
                      for (lab, k), v in sorted(values.items(), key=lambda x: label_key(x[0][0])))
 
 
-def _limit_change(ev: _Evidence, clause: str, m, schemas, labels, lead, clause_lead, pronoun) \
+def _limit_change(ev: _Evidence, sentence: str, clause: str, m, schemas, lead, clause_lead, pronoun) \
         -> tuple[list[Finding], int]:
-    """A limit said to change from one value to another: the first is checked in the older version of each
-    comparison shown, the second in the newer. A side said as "none" is wrong when that version shows the limit."""
+    """A limit said to change from one value to another: the first in the older version of a comparison shown,
+    the second in the newer. A side said as "none" is wrong when that version shows the limit. With several
+    comparisons the claim is wrong only when it fits none of them; versions the sentence names ("In 2.0 -> 3.0,
+    ...", not the numbers of the change itself) say which comparisons it is about."""
     word, what = m.group(1).lower(), (m.group(2) or m.group(6) or "").lower()
     side = "min" if word.startswith("min") else "max"
     counts = "length" if "length" in word or what in ("length", "characters", "character", "chars", "char", "digits",
@@ -1335,8 +1337,10 @@ def _limit_change(ev: _Evidence, clause: str, m, schemas, labels, lead, clause_l
         return [], 0
     subjects = [_limit_name(m.group(3))] if m.group(3) else _subjects_at(clause, m.start(), (), lead, clause_lead,
                                                                           m.end(), pronoun)
-    pairs = list(dict.fromkeys((c["a_label"], c["b_label"]) for c in ev.comparisons
-                               if not labels or {c["a_label"], c["b_label"]} & set(labels)))
+    pairs = list(dict.fromkeys((c["a_label"], c["b_label"]) for c in ev.comparisons))
+    named = set(_labels_in(_LIMIT_CHANGE.sub(" ", sentence), ev.labels))
+    if named:
+        pairs = [p for p in pairs if set(p) <= named] or [p for p in pairs if set(p) & named]
     out, checked = [], 0
     for subject in subjects if pairs else ():  # with no comparison shown, nothing says which version is older
         looked = _shown_for(ev, subject, schemas, [])
@@ -1346,17 +1350,23 @@ def _limit_change(ev: _Evidence, clause: str, m, schemas, labels, lead, clause_l
         unset = {(lab, k) for lab, n, k in ev.no_limit if n == member and k in keywords}
         if not values:
             continue
-        checked += 1
-        wrong = False
+        fits = []  # for each comparison that shows this limit on both sides: whether the claim holds there
         for pair in pairs:
+            known, holds = True, True
             for lab, said in zip(pair, (m.group(4), m.group(5))):
                 shown = set().union(*(v for (x, _), v in values.items() if x == lab))
                 number = None if not re.match(r"-?\d", said) else float(said.replace(",", ""))
                 # a number not among those shown, or "none" where one is shown; a version not shown says nothing
                 none_shown = any(x == lab for x, _ in unset)
-                wrong = wrong or bool(shown) and (number is None or number not in shown) or \
-                    number is not None and not shown and (lab in looked or none_shown)
-        if wrong:
+                known = known and (bool(shown) or none_shown)
+                holds = holds and not (bool(shown) and (number is None or number not in shown) or
+                                       number is not None and not shown and (lab in looked or none_shown))
+            if known:
+                fits.append(holds)
+        if not fits:
+            continue
+        checked += 1
+        if not any(fits):
             nones = "".join(f"; no {k} in {lab}" for lab, k in sorted(unset, key=lambda x: label_key(x[0])))
             out.append(Finding("contradicted-claim", clause.strip(),
                                f"the evidence shows {subject}: {_shown_as(values)}{nones}",
@@ -1426,7 +1436,7 @@ def _check_limits(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
             schemas = [x for x in _IDENT.findall(_CODE.sub(lambda m: m.group(1), clause)) if x in ev.schemas]
 
             for m in list(_LIMIT_CHANGE.finditer(clause)):
-                found, counted = _limit_change(ev, clause, m, schemas, labels, lead, clause_lead, pronoun)
+                found, counted = _limit_change(ev, sentence, clause, m, schemas, lead, clause_lead, pronoun)
                 out += found
                 checked += counted
                 clause = clause[:m.start()] + " " * (m.end() - m.start()) + clause[m.end():]
