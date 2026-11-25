@@ -1337,3 +1337,62 @@ def test_a_limit_change_with_several_comparisons_is_wrong_only_when_it_fits_none
         r = verify(answer, evidence)
         assert [f.detail for f in r.findings if f.kind == "contradicted-claim"] == want, (answer, r.to_text())
         assert r.checked_limits == 1, answer
+
+
+def test_required_said_of_a_list_of_names_is_said_of_each(write):
+    root = write({"openapi.yaml": """
+        openapi: 3.1.0
+        info: {title: t, version: '1'}
+        paths:
+          /pets:
+            get:
+              parameters:
+                - {name: limit, in: query, required: true, schema: {type: integer}}
+                - {name: region, in: query, schema: {type: string}}
+                - {name: sort, in: query, schema: {type: string}}
+              responses: {'200': {description: ok}}
+          /owners:
+            get:
+              parameters:
+                - {name: region, in: query, required: true, schema: {type: string}}
+              responses: {'200': {description: ok}}
+        components:
+          schemas:
+            Pet:
+              type: object
+              required: [name]
+              properties: {name: {type: string}, tag: {type: string}, age: {type: integer}}
+            Attributes:
+              type: object
+              required: [name]
+              properties: {name: {type: string}}
+        """})
+    s = load_spec(root / "openapi.yaml", "v1")
+    evidence = [s.get_operation("GET /pets"), s.get_operation("GET /owners"), s.get_schema("Pet"),
+                s.get_schema("Attributes")]
+    region = "the evidence shows region on GET /pets optional in v1"
+    cases = {
+        # the names of a list, each
+        "`tag` and `name` are required.": (2, ["the evidence shows tag optional in v1"]),
+        "`name` and `age` are optional.": (2, ["the evidence shows name required in v1"]),
+        "`tag`, `age` and `name` are required.": (3, ["the evidence shows tag optional in v1",
+                                                      "the evidence shows age optional in v1"]),
+        "The `name` and `tag` fields of Pet are required.": (2, ["the evidence shows Pet.tag optional in v1"]),
+        # a list before one operation, or the operation said once for the clause
+        "`limit` and `region` on GET /pets are required.": (2, [region]),
+        "`limit` and `sort` on GET /pets are optional.": (2, ["the evidence shows limit on GET /pets required in v1"]),
+        "`limit`, `region` and `sort` on GET /pets are required.": (
+            3, [region, "the evidence shows sort on GET /pets optional in v1"]),
+        "The `limit` and `region` parameters of GET /pets are required.": (2, [region]),
+        "On GET /pets, `limit` and `region` are required.": (2, [region]),
+        "`limit` and `region` are required on GET /pets.": (2, [region]),
+        "`region` on GET /owners is required.": (1, []),
+        # "or": one of them is, not each
+        "`name` or `tag` is required.": (0, []),
+        # a schema whose name is a plural word is still a name
+        "`name` in Attributes is optional.": (1, ["the evidence shows Attributes.name required in v1"]),
+    }
+    for answer, (checked, want) in cases.items():
+        r = verify(answer, evidence)
+        assert [f.detail for f in r.findings if f.kind == "contradicted-claim"] == want, (answer, r.to_text())
+        assert r.checked_required == checked, (answer, r.checked_required)

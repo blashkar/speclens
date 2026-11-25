@@ -48,10 +48,15 @@ _OPERATION = re.compile(rf"\b(GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE|QUERY
 _KIND_PREFIX = re.compile(r"\b(?:operation|schema|field|parameter)\s*:(?!/)", re.I)
 
 
+# Names written as code in a list: "`limit`, `region` and `sort`". Its commas join names, not clauses.
+_CODE_LIST = re.compile(r"`[^`\n]+`(?:\s*,\s*(?:and\s+|or\s+)?`[^`\n]+`)+")
+
+
 def _clauses(sentence: str) -> list[str]:
-    """The clauses of a sentence, not splitting a path at its commas: GET /vets(name={name},city={city})."""
+    """The clauses of a sentence, not splitting a path at its commas, GET /vets(name={name},city={city}), or a
+    list of names at its commas, "`limit`, `region` and `sort` on GET /pets are required"."""
     keep = lambda m: m.group(0).replace(",", "\0")  # noqa: E731
-    return [c.replace("\0", ",") for c in _CLAUSE.split(_OPERATION.sub(keep, sentence))]
+    return [c.replace("\0", ",") for c in _CLAUSE.split(_CODE_LIST.sub(keep, _OPERATION.sub(keep, sentence)))]
 
 
 def _operation(method: str, path: str) -> str:
@@ -929,9 +934,16 @@ def _check_required(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
             claim = said.pop()
             labels = _labels_in(clause, ev.labels) or (in_sentence if len(in_sentence) == 1 else []) or \
                 ([section] if section else [])
+            # The one operation the clause, or else the sentence, says it is about: "On GET /pets, `limit` and
+            # `region` are required", "`limit` is required on GET /pets"
+            on = [_operation(*m.groups()) for m in _OPERATION_SAID.finditer(clause)] or \
+                [_operation(*m.groups()) for m in _OPERATION_SAID.finditer(sentence)]
+            on = list(dict.fromkeys(on))
             for subject in [_path_name(heading)] if flag else _required_subjects(clause):
                 # a parameter and its operation, apart: a parameter's name may hold dots (`$.xgafv`)
                 owner, member = subject.split("\x00") if "\x00" in subject else _member(subject)
+                if not owner and len(on) == 1 and (on[0], member) in ev.required_in:
+                    owner = on[0]  # a parameter of the operation said
                 held = _held_by(ev, owner)
                 if held != owner:  # `tag` of `Pet.owner`: the field of the schema Pet.owner is
                     owner, subject = held, f"{held}.{member} (through {owner})"
@@ -961,6 +973,11 @@ _TIES = {"is", "are", "was", "were", "be", "becomes", "became", "stays", "remain
          "always", "a", "an", "the", "not", "no", "longer", "never", "n't", "isn", "t", "field", "property",
          "parameter", "header", "attribute", "query", "path", "cookie", "body", "request", "response", "added",
          "new", "string", "integer", "number", "boolean", "array", "object"}
+
+
+# Words for several fields, between a list and where they are: "the `name` and `tag` fields of Pet", "the `limit`
+# and `region` parameters of GET /pets". Written so, in lower case, they are not names; a schema may be `Attributes`
+_KIND_PLURALS = {"fields", "properties", "parameters", "headers", "attributes"}
 
 
 # Plain words that, right after "required" or "optional", name being required, not a field: "the required status
@@ -1003,7 +1020,7 @@ def _required_subjects(clause: str) -> list[str]:
     code = [(m.start(), m.end(), _path_name(m.group(1))) for m in _CODE.finditer(text)]
     names = sorted(code + [(m.start(), m.end(), m.group(0)) for m in _IDENT.finditer(_CODE.sub(
         lambda m: " " * len(m.group(0)), text)) if not _REQUIRED_WORD.fullmatch(m.group(0))
-        and m.group(0).lower() not in _TIES | _NOT_REQUIRED_SUBJECT])
+        and m.group(0).lower() not in _TIES | _NOT_REQUIRED_SUBJECT and m.group(0) not in _KIND_PLURALS])
     names = [n for n in names if n[2]]
     for q in _REQUIRED_WORD.finditer(_CODE.sub(lambda m: "_" * len(m.group(0)), text)):
         before = [n for n in names if n[1] <= q.start()]
@@ -1016,8 +1033,9 @@ def _required_subjects(clause: str) -> list[str]:
             if side == "before":
                 held = _OPERATION_AFTER.fullmatch(gap(near[0]))
                 said = held and re.findall(r"[A-Za-z']+", f"{held.group(1)} {held.group(3)}")
-                if held and all(w.lower() in _TIES for w in said):
-                    out.append(f"{operations[int(held.group(2))]}\x00{near[0][2]}")  # `limit` on GET /pets
+                # `limit` on GET /pets; `limit` and `region` on GET /pets
+                if held and all(w.lower() in _TIES | _KIND_PLURALS for w in said):
+                    out += [f"{operations[int(held.group(2))]}\x00{n[2]}" for n in _listed(text, names, near[0])]
                     continue
                 # `tag` in the Pet schema, inside the Owner model: said of Pet.tag, Owner.tag only
                 kind, owner = None, near[0]
@@ -1032,18 +1050,20 @@ def _required_subjects(clause: str) -> list[str]:
                     continue  # "the Version schema is required": a word for a schema, not a field named so
                 if kind:
                     owned = _owned(text, names, owner)
-                    if owned != owner[2] and all(w.lower() in _TIES for w in between):
-                        out.append(owned)
+                    if owned != [owner[2]] and all(w.lower() in _TIES for w in between):
+                        out += owned
                     continue
             if all(w.lower() in _TIES for w in between):
                 if side == "after" and near[0] not in code and near[0][2].lower() in _REQUIREDNESS:
                     following = re.match(r"\W*([A-Za-z]+)", text[near[0][1]:])
                     if not following or following.group(1).lower() not in _KIND_WORDS:
                         continue  # "the required status changed": being required, not a field
-                out.append(_owned(text, names, near[0]) if side == "before" else near[0][2])
+                out += _owned(text, names, near[0]) if side == "before" else [near[0][2]]
     return list(dict.fromkeys(out))
 
 
+# An operation a clause says it is about: "on GET /pets", "for the POST /pets operation"
+_OPERATION_SAID = re.compile(rf"(?i:\b(?:on|in|for|of)\s+(?:the\s+)?){_OPERATION.pattern}")
 # A parameter's operation between it and "required": "`limit` on GET /pets is", "`limit` in the GET /pets
 # operation is", "`limit` query parameter on GET /pets is"
 _OPERATION_AFTER = re.compile(r"([A-Za-z' ]*?)\s*\b(?:in|of|on|for)\s+(?:the\s+)?(?:operation\s+|endpoint\s+)?"
@@ -1058,18 +1078,39 @@ _OWNER_BEFORE = re.compile(r"\b(?:in|of|on|inside|within)\s+(?:the\s+|an?\s+)?(?
                            re.I)
 
 
-def _owned(text: str, names: list, near: tuple) -> str:
-    """The name "required" is said of, when the nearest name before it is where a field is: "`tag` in Pet is
-    required" and "the `tag` field of Pet is optional" are said of Pet.tag, not of Pet."""
+def _owned(text: str, names: list, near: tuple) -> list[str]:
+    """The names "required" is said of, when the nearest name before it is where a field is: "`tag` in Pet is
+    required" and "the `tag` field of Pet is optional" are said of Pet.tag, not of Pet; "`name` and `tag` in Pet
+    are required" of Pet.name and Pet.tag. Else the nearest name, with the names listed before it."""
     i = names.index(near)
     owner = _OWNER_BEFORE.search(text[:near[0]])
     # the name before the word saying where ("inside" may be read as a name itself)
     field = next((n for n in reversed(names[:i]) if owner and n[1] <= owner.start()), None)
-    if not field:
-        return near[2]
-    if not all(w.lower() in _TIES for w in re.findall(r"[A-Za-z']+", text[field[1]:owner.start()])):
-        return near[2]
-    return f"{near[2]}.{field[2]}"
+    if not field or not all(w.lower() in _TIES | _KIND_PLURALS
+                            for w in re.findall(r"[A-Za-z']+", text[field[1]:owner.start()])):
+        return [n[2] for n in _listed(text, names, near)]
+    return [f"{near[2]}.{n[2]}" for n in _listed(text, names, field)]
+
+
+# Between the names of a list: "`a`, `b` and `c`", "`a`, `b`, and `c`", "both `a` and `b`". A list joined by "or"
+# says that one of them is, not each: "`a` or `b` is required"
+_LIST_JOIN = re.compile(r"\s*(?:,\s*(?:and\s+)?|and\s+|,?\s*as\s+well\s+as\s+)", re.I)
+_OR_JOIN = re.compile(r"\s*,?\s*(?:or|nor)\s+|\s*/\s*", re.I)
+
+
+def _listed(text: str, names: list, last: tuple) -> list[tuple]:
+    """`last` and the names listed before it, in order; none when the list is joined by "or"."""
+    i = names.index(last)
+    listed = [last]
+    while i > 0:
+        gap = text[names[i - 1][1]:names[i][0]]
+        if _OR_JOIN.fullmatch(gap):
+            return []
+        if not _LIST_JOIN.fullmatch(gap):
+            break
+        i -= 1
+        listed.insert(0, names[i])
+    return listed
 
 
 def _path_name(code: str) -> str:
