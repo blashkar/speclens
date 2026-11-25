@@ -42,6 +42,7 @@ _ID = re.compile(rf"(?<![\w.:+-])({LABEL}):(operation|schema|field|parameter)/")
 _CODE = re.compile(r"`([^`\n]+)`")
 _PART = r"(?:\$\.|[$@])?[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*"  # petOwner, pet-owner, $id, @type, $.xgafv
 _IDENT = re.compile(rf"{_PART}(?:\.{_PART})*")
+_BRACKETED = re.compile(rf"{_IDENT.pattern}(?:\[[A-Za-z_]\w*\])+")  # filter[status], page[size][max]
 # An operation written as method and path: "DELETE /pets/{id}". Its path is one thing, not the names in it.
 _OPERATION = re.compile(rf"\b(GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE|QUERY)\s+({PATH})")
 # A kind written before a name, as in an id: "schema:Pet", "(operation: GET /pets)". The kind is not a name.
@@ -559,6 +560,7 @@ def _words_of(text: str) -> set[str]:
     for token in _IDENT.findall(text):
         out.add(token)
         out.update(token.split("."))
+    out.update(_BRACKETED.findall(text))
     return out
 
 
@@ -622,6 +624,9 @@ def _names(answer: str) -> list[str]:
         if code.startswith("/") or " " in code or re.fullmatch(r"[\d.\-+eE]+|'.*'|\".*\"", code) or \
                 _date_format(code):
             continue  # a path, a phrase, a number, a quoted value or a date format
+        if _BRACKETED.fullmatch(code):
+            found.append(code)  # `filter[status]`: one name, as a parameter may be named
+            continue
         found.extend(t for t in _IDENT.findall(code) if t)
     plain = _CODE.sub(" ", without_ids)
     for token in _IDENT.findall(plain):
@@ -707,7 +712,8 @@ def _checked(answer: str, ev: "_Evidence", known=None, cover=()) -> Verification
 
     # `Pet*`: a family of names, known when the evidence has a name it begins
     families = set(re.findall(r"`([A-Za-z_][\w.]*)\*`", answer))
-    unknown = [n for n in names if not is_known(n) and not all(is_known(p) for p in n.split(".") if p != "$")
+    unknown = [n for n in names if not is_known(n)
+               and not all(is_known(p) for p in re.split(r"[.\[\]]+", n) if p and p != "$")
                and not (n in families and any(w.startswith(n) for w in ev.words))]
 
     claims, absent, previous, previous_in = 0, set(), [], []
