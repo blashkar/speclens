@@ -40,7 +40,7 @@ from .text import LABEL, PATH, key, label_key, trim_path, words
 KINDS = ("operation", "schema", "field", "parameter")
 _ID = re.compile(rf"(?<![\w.:+-])({LABEL}):(operation|schema|field|parameter)/")  # a label, as spec allows
 _CODE = re.compile(r"`([^`\n]+)`")
-_PART = r"[$@]?[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*"  # pet_owner, petOwner, pet-owner, $id, @type
+_PART = r"(?:\$\.|[$@])?[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*"  # petOwner, pet-owner, $id, @type, $.xgafv
 _IDENT = re.compile(rf"{_PART}(?:\.{_PART})*")
 # An operation written as method and path: "DELETE /pets/{id}". Its path is one thing, not the names in it.
 _OPERATION = re.compile(rf"\b(GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE|QUERY)\s+({PATH})")

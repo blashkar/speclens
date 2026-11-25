@@ -1396,3 +1396,30 @@ def test_required_said_of_a_list_of_names_is_said_of_each(write):
         r = verify(answer, evidence)
         assert [f.detail for f in r.findings if f.kind == "contradicted-claim"] == want, (answer, r.to_text())
         assert r.checked_required == checked, (answer, r.checked_required)
+
+
+def test_a_name_starting_with_dollar_dot_is_one_name(write):
+    root = write({"openapi.yaml": """
+        openapi: 3.0.3
+        info: {title: t, version: '1'}
+        paths:
+          /pets:
+            get:
+              parameters:
+                - {name: $.xgafv, in: query, schema: {type: string, enum: ['1', '2']}}
+                - {name: limit, in: query, required: true, schema: {type: integer}}
+              responses: {'200': {description: ok}}
+        """})
+    s = load_spec(root / "openapi.yaml", "v1")
+    evidence = [s.get_operation("GET /pets")]
+    optional = "the evidence shows $.xgafv on GET /pets optional in v1"
+    cases = {
+        "`$.xgafv` on GET /pets is required.": [optional],
+        "The `$.xgafv` query parameter of GET /pets is required.": [optional],
+        "`limit` and `$.xgafv` on GET /pets are required.": [optional],
+        "`$.xgafv` on GET /pets is optional.": [],
+    }
+    for answer, want in cases.items():
+        r = verify(answer, evidence)
+        assert [f.detail for f in r.findings if f.kind == "contradicted-claim"] == want, (answer, r.to_text())
+    assert [f.text for f in verify("GET /pets takes `$.foo`.", evidence).findings] == ["$.foo"]
