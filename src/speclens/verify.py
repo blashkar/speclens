@@ -279,10 +279,11 @@ class _Evidence:
             self.members.setdefault(label, set()).add((owner, member))
 
     def dotted_names(self) -> frozenset:
-        """Field and member names holding a dot, as the evidence shows them."""
+        """Field, member and parameter names holding a dot or a bracket (`ids[]`, `filter[status]`), as the evidence
+        shows them."""
         names = {m for ms in self.members.values() for _, m in ms} | set(self.limits) | set(self.required) | \
             set(self.types)
-        return frozenset(n for n in names if "." in n)
+        return frozenset(n for n in names if "." in n or "[" in n)
 
     def owner_of(self, node_id: str, name: str) -> str:
         """The schema in a field id's `Schema.field`. A field's own name may hold dots (`airline.leg.code`), and so
@@ -561,6 +562,11 @@ def _words_of(text: str) -> set[str]:
     return out
 
 
+def _without_references(text: str) -> str:
+    """The text without chunk references such as [3] or [doc1], keeping brackets inside code (`filter[status]`)."""
+    return re.sub(rf"(`[^`\n]+`)|{_REFERENCE.pattern}", lambda m: m.group(1) or " ", text)
+
+
 def _without_ids(text: str) -> str:
     out, last = [], 0
     for _, (start, end) in _cited_ids(text):
@@ -701,11 +707,11 @@ def _checked(answer: str, ev: "_Evidence", known=None, cover=()) -> Verification
 
     # `Pet*`: a family of names, known when the evidence has a name it begins
     families = set(re.findall(r"`([A-Za-z_][\w.]*)\*`", answer))
-    unknown = [n for n in names if not is_known(n) and not all(is_known(p) for p in n.split("."))
+    unknown = [n for n in names if not is_known(n) and not all(is_known(p) for p in n.split(".") if p != "$")
                and not (n in families and any(w.startswith(n) for w in ev.words))]
 
     claims, absent, previous, previous_in = 0, set(), [], []
-    for sentence in (s.strip() for s in _SENTENCE.split(_REFERENCE.sub(" ", _without_ids(answer))) if s.strip()):
+    for sentence in (s.strip() for s in _SENTENCE.split(_without_references(_without_ids(answer))) if s.strip()):
         in_sentence = _labels_in(sentence, ev.labels)
         pending = None  # a claim word with nothing named yet: "Since 1.2, Pet has tag"
         for clause in _clauses(sentence):
@@ -911,7 +917,7 @@ def _check_required(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
         return [], 0
     out, checked = [], 0
     section, heading = None, None
-    for sentence in (s.strip() for s in _SENTENCE.split(_REFERENCE.sub(" ", _without_ids(answer))) if s.strip()):
+    for sentence in (s.strip() for s in _SENTENCE.split(_without_references(_without_ids(answer))) if s.strip()):
         if _SECTION.fullmatch(sentence):  # "#### Acme 1.0": the lines below are about that version
             in_heading = _labels_in(sentence, ev.labels)
             section = in_heading[0] if len(in_heading) == 1 else None
@@ -1117,6 +1123,10 @@ def _path_name(code: str) -> str:
     """The name a code span is about: `Pet.tag` as written, the last part of a path through arrays or
     several levels (`pets[].tag` -> tag), nothing for code that is not a name."""
     code = code.strip()
+    if code in _DOTTED.get():
+        return code  # a name the evidence shows whole: `filter[status]`, `$.xgafv`
+    if code.startswith("$."):
+        code = code[2:]  # a path from the root, as JSONPath writes it: `$.name`
     if _IDENT.fullmatch(code):
         if code.count(".") <= 1 or code in _DOTTED.get() or "." not in _member(code)[0]:
             return code  # `Pet.tag`, or a field whose own name holds dots, alone or with its schema
@@ -1423,7 +1433,7 @@ def _check_limits(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
         return [], 0
     out, checked = [], 0
     heading, previous, section = None, None, None
-    for sentence in (s.strip() for s in _SENTENCE.split(_REFERENCE.sub(" ", _without_ids(answer))) if s.strip()):
+    for sentence in (s.strip() for s in _SENTENCE.split(_without_references(_without_ids(answer))) if s.strip()):
         if _SECTION.fullmatch(sentence):  # "#### Acme 1.0", "**Version 2.0**": the lines below are about it
             in_heading = _labels_in(sentence, ev.labels)
             section = in_heading[0] if len(in_heading) == 1 else None

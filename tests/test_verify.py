@@ -1423,3 +1423,44 @@ def test_a_name_starting_with_dollar_dot_is_one_name(write):
         r = verify(answer, evidence)
         assert [f.detail for f in r.findings if f.kind == "contradicted-claim"] == want, (answer, r.to_text())
     assert [f.text for f in verify("GET /pets takes `$.foo`.", evidence).findings] == ["$.foo"]
+
+
+def test_a_name_holding_brackets_is_one_name_and_dollar_dot_is_the_root(write):
+    root = write({"openapi.yaml": """
+        openapi: 3.0.3
+        info: {title: t, version: '1'}
+        paths:
+          /pets:
+            get:
+              parameters:
+                - {name: 'ids[]', in: query, schema: {type: array, maxItems: 5, items: {type: string}}}
+                - {name: 'filter[status]', in: query, required: true, schema: {type: string, maxLength: 9}}
+                - {name: limit, in: query, required: true, schema: {type: integer}}
+              responses: {'200': {description: ok}}
+        components:
+          schemas:
+            Pet:
+              type: object
+              properties: {name: {type: string, maxLength: 40}}
+        """})
+    s = load_spec(root / "openapi.yaml", "v1")
+    evidence = [s.get_operation("GET /pets"), s.get_schema("Pet")]
+    ids = "the evidence shows ids[] on GET /pets optional in v1"
+    cases = {
+        # a parameter named with brackets, as the evidence shows it
+        "`ids[]` on GET /pets is required.": [ids],
+        "`limit` and `ids[]` on GET /pets are required.": [ids],
+        "`filter[status]` on GET /pets is optional.": ["the evidence shows filter[status] on GET /pets required in v1"],
+        "`ids[]` has at most 3 items.": ["the evidence shows ids[]: maxItems 5 in v1"],
+        "`filter[status]` has a maximum length of 4.": ["the evidence shows filter[status]: maxLength 9 in v1"],
+        "`ids[]` on GET /pets is optional.": [],
+        # `$.` is the root, as JSONPath writes it
+        "`$.name` has a maximum length of 30.": ["the evidence shows name: maxLength 40 in v1"],
+        "`$.name` has a maximum length of 40.": [],
+        # a chunk reference outside code is still not a name
+        "Pet has `name` [1].": [],
+    }
+    for answer, want in cases.items():
+        r = verify(answer, evidence)
+        assert [f.detail for f in r.findings] == want, (answer, r.to_text())
+    assert [f.text for f in verify("`$.foo` is a string.", evidence).findings] == ["$.foo"]
