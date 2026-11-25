@@ -1464,3 +1464,24 @@ def test_a_name_holding_brackets_is_one_name_and_dollar_dot_is_the_root(write):
         r = verify(answer, evidence)
         assert [f.detail for f in r.findings] == want, (answer, r.to_text())
     assert [f.text for f in verify("`$.foo` is a string.", evidence).findings] == ["$.foo"]
+
+
+def test_an_unknown_name_holding_a_key_in_brackets_is_reported_whole(write):
+    root = write({"openapi.yaml": """
+        openapi: 3.0.3
+        info: {title: t, version: '1'}
+        paths:
+          /pets:
+            get:
+              parameters:
+                - {name: 'filter[status]', in: query, schema: {type: string}}
+              responses: {'200': {description: ok}}
+        """})
+    evidence = [load_spec(root / "openapi.yaml", "v1").get_operation("GET /pets")]
+    cases = {
+        "`filter[kind]` is a parameter.": ["filter[kind]"],
+        "`filter[status]` is a parameter.": [],
+        "`filter[status]` and `page[size]` are parameters.": ["page[size]"],
+    }
+    for answer, want in cases.items():
+        assert [f.text for f in verify(answer, evidence).findings if f.kind == "unknown-name"] == want, answer
