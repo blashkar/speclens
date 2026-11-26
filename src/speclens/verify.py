@@ -379,14 +379,24 @@ class _Evidence:
         for c in changes:
             if not isinstance(c, dict) or c.get("kind") not in ("constraint-tightened", "constraint-loosened"):
                 continue
-            for side, label in (("before", labels["a_label"]), ("after", labels["b_label"])):
+            for side, label, end in (("before", labels["a_label"], "a"), ("after", labels["b_label"], "b")):
+                names = _changed_thing(c)
+                # a field below another (`Pet.owner.name`): also by its way from the schema, as its id names it
+                node_id = str(c.get(end) or c.get("b" if end == "a" else "a") or "")
+                path, owner = None, None
+                if ":field/" in node_id:
+                    path = node_id.split("/", 1)[1].replace("#items", "[]")  # Pet.vets#items.name
+                    owner = self.owner_of(node_id, path)
+                    path = path[len(owner) + 1:] if "." in path[len(owner) + 1:] else None
                 m = re.fullmatch(r"(\w+) (-?[\d.]+(?:e[+-]?\d+)?)", str(c.get(side) or ""))
                 if m:
-                    for name in _changed_thing(c):
+                    for name in names:
                         self.mark_limit(label, name, m.group(1), float(m.group(2)))
+                    if path:
+                        self.mark_limit(label, path, m.group(1), float(m.group(2)), owner)
                 none = re.fullmatch(r"(\w+) none", str(c.get(side) or ""))
                 if none:
-                    self.no_limit.update((label, name, none.group(1)) for name in _changed_thing(c))
+                    self.no_limit.update((label, name, none.group(1)) for name in names | ({path} if path else set()))
 
     def required_changes(self, labels: dict, changes: list):
         """What comparisons show: a parameter or field added as optional or required, required added or removed."""
@@ -1446,6 +1456,7 @@ def _cited_per_sentence(answer: str, sentences: list[str]) -> list[list[str]]:
         names = []
         for node_id, (start, _) in _cited_ids(piece):
             kind, _, name = node_id.partition(":")[2].partition("/")
+            name = name.replace("#items", "[]") if kind == "field" else name  # Pet.vets#items.name: Pet.vets[].name
             if kind == "parameter" and "#" in name:
                 name = name.split("#", 1)[1].split("/", 1)[-1]
             elif kind != "field":
