@@ -1542,3 +1542,58 @@ def test_a_limit_change_that_names_no_field_is_about_the_field_it_cites(write):
         r = verify(answer, evidence)
         assert [f.detail for f in r.findings if f.kind == "contradicted-claim"] == want, (answer, r.to_text())
         assert r.checked_limits == checked, (answer, r.checked_limits)
+
+
+def test_a_limit_change_of_a_field_inside_another_is_found_by_its_way(write):
+    def spec(name_max, city_max, vet_max):
+        city = f", maxLength: {city_max}" if city_max is not None else ""
+        return f"""
+            openapi: 3.0.3
+            info: {{title: t, version: '1'}}
+            paths: {{}}
+            components:
+              schemas:
+                Pet:
+                  type: object
+                  properties:
+                    name: {{type: string, maxLength: 7}}
+                    owner:
+                      type: object
+                      properties:
+                        name: {{type: string, maxLength: {name_max}}}
+                        address:
+                          type: object
+                          properties:
+                            city: {{type: string{city}}}
+                    vets:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          name: {{type: string, maxLength: {vet_max}}}
+            """
+    root = write({"v1.yaml": spec(10, 20, 3), "v2.yaml": spec(30, None, 4)})
+    s = SpecSet()
+    s.load(root / "v1.yaml", "v1")
+    s.load(root / "v2.yaml", "v2")
+    evidence = [s.compare("Pet", "v1", "v2")]
+    owner = "the evidence shows {}: maxLength 10 in v1; maxLength 30 in v2"
+    city = "the evidence shows {}: maxLength 20 in v1; no maxLength in v2"
+    vets = "the evidence shows {}: maxLength 3 in v1; maxLength 4 in v2"
+    cases = {
+        # cited by its id, or named by its way from the schema, with the schema or without
+        "- Maximum length changed from 10 to 20 [v2:field/Pet.owner.name]": (1, [owner.format("Pet.owner.name")]),
+        "- Maximum length changed from 10 to 30 [v2:field/Pet.owner.name]": (1, []),
+        "The maximum length of `owner.name` changed from 10 to 20.": (1, [owner.format("owner.name")]),
+        "The maximum length of `Pet.owner.name` changed from 10 to 30.": (1, []),
+        # removed in the newer version
+        "The maximum length of `owner.address.city` changed from 20 to none.": (1, []),
+        "The maximum length of `owner.address.city` changed from 20 to 50.": (1, [city.format("owner.address.city")]),
+        # a field of the items of an array, cited as `#items`
+        "- Maximum length changed from 3 to 9 [v2:field/Pet.vets#items.name]": (1, [vets.format("Pet.vets[].name")]),
+        "The maximum length of `vets[].name` changed from 3 to 4.": (1, []),
+    }
+    for answer, (checked, want) in cases.items():
+        r = verify(answer, evidence)
+        assert [f.detail for f in r.findings if f.kind == "contradicted-claim"] == want, (answer, r.to_text())
+        assert r.checked_limits == checked, (answer, r.checked_limits)
