@@ -1485,3 +1485,60 @@ def test_an_unknown_name_holding_a_key_in_brackets_is_reported_whole(write):
     }
     for answer, want in cases.items():
         assert [f.text for f in verify(answer, evidence).findings if f.kind == "unknown-name"] == want, answer
+
+
+def test_a_limit_change_that_names_no_field_is_about_the_field_it_cites(write):
+    def spec(name_max, age_min, limit_max, nick_max):
+        age = f", minimum: {age_min}" if age_min is not None else ""
+        return f"""
+            openapi: 3.0.3
+            info: {{title: t, version: '1'}}
+            paths:
+              /pets:
+                get:
+                  parameters:
+                    - {{name: limit, in: query, schema: {{type: integer, maximum: {limit_max}}}}}
+                  responses: {{'200': {{description: ok}}}}
+            components:
+              schemas:
+                Pet:
+                  type: object
+                  properties:
+                    name: {{type: string, maxLength: {name_max}}}
+                    nick: {{type: string, maxLength: {nick_max}}}
+                    age: {{type: integer{age}}}
+            """
+    root = write({"v1.yaml": spec(10, None, 50, 5), "v2.yaml": spec(30, 1, 100, 8)})
+    s = SpecSet()
+    s.load(root / "v1.yaml", "v1")
+    s.load(root / "v2.yaml", "v2")
+    evidence = [s.compare("Pet", "v1", "v2"), s.compare("GET /pets", "v1", "v2")]
+    name = "the evidence shows Pet.name: maxLength 10 in v1; maxLength 30 in v2"
+    age = "the evidence shows Pet.age: minimum 1 in v2; no minimum in v1"
+    cases = {
+        "- **Constraint relaxed: maximum length changed from 10 to 20** [v2:field/Pet.name]": (1, [name]),
+        "- **Constraint relaxed: maximum length changed from 10 to 30** [v2:field/Pet.name]": (1, []),
+        "- Minimum value changed from none (unbounded) to 5 [v2:field/Pet.age]": (1, [age]),
+        "- Minimum value changed from none (unbounded) to 1 [v2:field/Pet.age]": (1, []),
+        "- Maximum changed from 50 to 80 [v2:parameter/GET /pets#query/limit]": (
+            1, ["the evidence shows limit: maximum 50 in v1; maximum 100 in v2"]),
+        # the id after the full stop is the sentence's, not the next one's
+        "Maximum length changed from 10 to 30. [v2:field/Pet.name] Minimum changed from none to 3. [v2:field/Pet.age]":
+            (2, [age]),
+        # a field named in the sentence is what it is about; two fields cited: neither is taken
+        "- The maximum length of `name` changed from 10 to 30 [v2:field/Pet.age]": (1, []),
+        "- Maximum length changed from 10 to 20 [v2:field/Pet.name] and minimum from none to 1 [v2:field/Pet.age]":
+            (0, []),
+        # an id that opens a line is that line's, not the line above's
+        "- Maximum length changed from 5 to 8\n- [v2:field/Pet.name] Maximum length changed from 10 to 30": (1, []),
+        "- Maximum length changed from 5 to 8 [v2:field/Pet.nick]\n"
+        "- [v2:field/Pet.name] Maximum length changed from 10 to 30": (2, []),
+        "Maximum length changed from 5 to 8.\n[v2:field/Pet.name] Maximum length changed from 10 to 30.": (1, []),
+        "| field | change |\n|---|---|\n| [v2:field/Pet.name] | Maximum length changed from 10 to 30 |": (1, []),
+        "- Maximum length changed from 5 to 8 [v2:field/Pet.nick]\n"
+        "- [v2:field/Pet.name] Maximum length changed from 10 to 20": (2, [name]),
+    }
+    for answer, (checked, want) in cases.items():
+        r = verify(answer, evidence)
+        assert [f.detail for f in r.findings if f.kind == "contradicted-claim"] == want, (answer, r.to_text())
+        assert r.checked_limits == checked, (answer, r.checked_limits)
