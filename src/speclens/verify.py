@@ -1436,10 +1436,12 @@ def _limit_change(ev: _Evidence, sentence: str, clause: str, m, schemas, lead, c
 
 def _cited_per_sentence(answer: str, sentences: list[str]) -> list[list[str]]:
     """The fields and parameters each sentence cites, by name (`Pet.age`, `limit`). Ids after a sentence's full stop,
-    before the next one's first word, count for the sentence before: "... to 20. [v2:field/Pet.age] Next ...".
-    Nothing when the sentences read with their ids do not line up with `sentences`."""
+    before the next one's first word on the same line, count for the sentence before: "... to 20. [v2:field/Pet.age]
+    Next ..."; an id that opens a line is that line's. Nothing when the sentences read with their ids do not line
+    up with `sentences`."""
     out, plain = [], []
-    for piece in _SENTENCE.split(answer):
+    breaks = [""] + [m.group(0) for m in _SENTENCE.finditer(answer)]
+    for piece, before in zip(_SENTENCE.split(answer), breaks):
         text = _without_references(_without_ids(piece)).strip()
         names = []
         for node_id, (start, _) in _cited_ids(piece):
@@ -1448,7 +1450,7 @@ def _cited_per_sentence(answer: str, sentences: list[str]) -> list[list[str]]:
                 name = name.split("#", 1)[1].split("/", 1)[-1]
             elif kind != "field":
                 continue
-            if out and not re.search(r"\w", _without_references(_without_ids(piece[:start]))):
+            if out and "\n" not in before and not re.search(r"\w", _without_references(_without_ids(piece[:start]))):
                 out[-1] = list(dict.fromkeys(out[-1] + [name]))
             else:
                 names.append(name)

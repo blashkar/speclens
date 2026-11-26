@@ -1488,7 +1488,7 @@ def test_an_unknown_name_holding_a_key_in_brackets_is_reported_whole(write):
 
 
 def test_a_limit_change_that_names_no_field_is_about_the_field_it_cites(write):
-    def spec(name_max, age_min, limit_max):
+    def spec(name_max, age_min, limit_max, nick_max):
         age = f", minimum: {age_min}" if age_min is not None else ""
         return f"""
             openapi: 3.0.3
@@ -1505,9 +1505,10 @@ def test_a_limit_change_that_names_no_field_is_about_the_field_it_cites(write):
                   type: object
                   properties:
                     name: {{type: string, maxLength: {name_max}}}
+                    nick: {{type: string, maxLength: {nick_max}}}
                     age: {{type: integer{age}}}
             """
-    root = write({"v1.yaml": spec(10, None, 50), "v2.yaml": spec(30, 1, 100)})
+    root = write({"v1.yaml": spec(10, None, 50, 5), "v2.yaml": spec(30, 1, 100, 8)})
     s = SpecSet()
     s.load(root / "v1.yaml", "v1")
     s.load(root / "v2.yaml", "v2")
@@ -1528,6 +1529,14 @@ def test_a_limit_change_that_names_no_field_is_about_the_field_it_cites(write):
         "- The maximum length of `name` changed from 10 to 30 [v2:field/Pet.age]": (1, []),
         "- Maximum length changed from 10 to 20 [v2:field/Pet.name] and minimum from none to 1 [v2:field/Pet.age]":
             (0, []),
+        # an id that opens a line is that line's, not the line above's
+        "- Maximum length changed from 5 to 8\n- [v2:field/Pet.name] Maximum length changed from 10 to 30": (1, []),
+        "- Maximum length changed from 5 to 8 [v2:field/Pet.nick]\n"
+        "- [v2:field/Pet.name] Maximum length changed from 10 to 30": (2, []),
+        "Maximum length changed from 5 to 8.\n[v2:field/Pet.name] Maximum length changed from 10 to 30.": (1, []),
+        "| field | change |\n|---|---|\n| [v2:field/Pet.name] | Maximum length changed from 10 to 30 |": (1, []),
+        "- Maximum length changed from 5 to 8 [v2:field/Pet.nick]\n"
+        "- [v2:field/Pet.name] Maximum length changed from 10 to 20": (2, [name]),
     }
     for answer, (checked, want) in cases.items():
         r = verify(answer, evidence)
