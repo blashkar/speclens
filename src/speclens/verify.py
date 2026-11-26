@@ -1379,12 +1379,13 @@ def _shown_as(values: dict) -> str:
                      for (lab, k), v in sorted(values.items(), key=lambda x: label_key(x[0][0])))
 
 
-def _limit_change(ev: _Evidence, sentence: str, clause: str, m, schemas, lead, clause_lead, pronoun) \
-        -> tuple[list[Finding], int]:
+def _limit_change(ev: _Evidence, sentence: str, clause: str, m, schemas, lead, clause_lead, pronoun,
+                  cited=()) -> tuple[list[Finding], int]:
     """A limit said to change from one value to another: the first in the older version of a comparison shown,
     the second in the newer. A side said as "none" is wrong when that version shows the limit. With several
     comparisons the claim is wrong only when it fits none of them; versions the sentence names ("In 2.0 -> 3.0,
-    ...", not the numbers of the change itself) say which comparisons it is about."""
+    ...", not the numbers of the change itself) say which comparisons it is about. A sentence that names no field but
+    cites one ("minimum changed from none to 1 [v2:field/Pet.age]") is about the field it cites."""
     word, what = m.group(1).lower(), (m.group(2) or m.group(6) or "").lower()
     side = "min" if word.startswith("min") else "max"
     counts = "length" if "length" in word or what in ("length", "characters", "character", "chars", "char", "digits",
@@ -1394,6 +1395,8 @@ def _limit_change(ev: _Evidence, sentence: str, clause: str, m, schemas, lead, c
         return [], 0
     subjects = [_limit_name(m.group(3))] if m.group(3) else _subjects_at(clause, m.start(), (), lead, clause_lead,
                                                                           m.end(), pronoun)
+    if not subjects and len(cited) == 1:
+        subjects = list(cited)
     pairs = list(dict.fromkeys((c["a_label"], c["b_label"]) for c in ev.comparisons))
     named = set(_labels_in(_LIMIT_CHANGE.sub(" ", sentence), ev.labels))
     if named:
@@ -1431,6 +1434,30 @@ def _limit_change(ev: _Evidence, sentence: str, clause: str, m, schemas, lead, c
     return out, checked
 
 
+def _cited_per_sentence(answer: str, sentences: list[str]) -> list[list[str]]:
+    """The fields and parameters each sentence cites, by name (`Pet.age`, `limit`). Ids after a sentence's full stop,
+    before the next one's first word, count for the sentence before: "... to 20. [v2:field/Pet.age] Next ...".
+    Nothing when the sentences read with their ids do not line up with `sentences`."""
+    out, plain = [], []
+    for piece in _SENTENCE.split(answer):
+        text = _without_references(_without_ids(piece)).strip()
+        names = []
+        for node_id, (start, _) in _cited_ids(piece):
+            kind, _, name = node_id.partition(":")[2].partition("/")
+            if kind == "parameter" and "#" in name:
+                name = name.split("#", 1)[1].split("/", 1)[-1]
+            elif kind != "field":
+                continue
+            if out and not re.search(r"\w", _without_references(_without_ids(piece[:start]))):
+                out[-1] = list(dict.fromkeys(out[-1] + [name]))
+            else:
+                names.append(name)
+        if text:
+            out.append(list(dict.fromkeys(names)))
+            plain.append(text)
+    return out if plain == sentences else [[] for _ in sentences]
+
+
 def _check_limits(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
     """Claims of a field's or parameter's limit ("`nickname`: maximum 40 characters") where the evidence shows
     that limit with another value, and claims that it has none ("`nickname` has no maximum length") where the
@@ -1439,7 +1466,9 @@ def _check_limits(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
         return [], 0
     out, checked = [], 0
     heading, previous, section = None, None, None
-    for sentence in (s.strip() for s in _SENTENCE.split(_without_references(_without_ids(answer))) if s.strip()):
+    sentences = [s.strip() for s in _SENTENCE.split(_without_references(_without_ids(answer))) if s.strip()]
+    cites = _cited_per_sentence(answer, sentences)
+    for sentence, cited in zip(sentences, cites):
         if _SECTION.fullmatch(sentence):  # "#### Acme 1.0", "**Version 2.0**": the lines below are about it
             in_heading = _labels_in(sentence, ev.labels)
             section = in_heading[0] if len(in_heading) == 1 else None
@@ -1493,7 +1522,7 @@ def _check_limits(answer: str, ev: _Evidence) -> tuple[list[Finding], int]:
             schemas = [x for x in _IDENT.findall(_CODE.sub(lambda m: m.group(1), clause)) if x in ev.schemas]
 
             for m in list(_LIMIT_CHANGE.finditer(clause)):
-                found, counted = _limit_change(ev, sentence, clause, m, schemas, lead, clause_lead, pronoun)
+                found, counted = _limit_change(ev, sentence, clause, m, schemas, lead, clause_lead, pronoun, cited)
                 out += found
                 checked += counted
                 clause = clause[:m.start()] + " " * (m.end() - m.start()) + clause[m.end():]
